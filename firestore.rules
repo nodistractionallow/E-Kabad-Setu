@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // E-Kabad Setu: Real-time multi-device synchronization for scrap lots, materials, and facility transactions
+    match /lots/{lotId} {
+      allow read, write: if true;
+    }
+    match /materials/{materialId} {
+      allow read, write: if true;
+    }
+    match /collectors/{collectorId} {
+      allow read, write: if true;
+    }
+    match /facilities/{facilityId} {
+      allow read, write: if true;
+    }
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

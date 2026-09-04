@@ -1,0 +1,11 @@
+{
+  "name": "E-Kabad Setu",
+  "description": "Digital Bridge between Informal Scrap Collectors and Authorized E-Waste Recyclers under E-Waste Rules 2022.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
