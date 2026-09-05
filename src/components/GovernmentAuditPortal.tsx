@@ -24,7 +24,8 @@ import {
   UserCheck,
   Check,
   XCircle,
-  FileCheck
+  FileCheck,
+  LogOut
 } from 'lucide-react';
 import { DatasetsExplorerModal } from './DatasetsExplorerModal';
 import { FieldResearchModal } from './FieldResearchModal';
@@ -108,35 +109,12 @@ export const GovernmentAuditPortal: React.FC = () => {
             </div>
           </div>
 
-          {/* Quick Nav Switches */}
+          {/* Header Action Controls */}
           <div className="flex items-center gap-2">
             <div className="text-right mr-3 hidden lg:block">
               <div className="text-[11px] font-mono text-slate-500">Authenticated Auditor</div>
               <div className="text-xs font-bold text-slate-900">Dr. R. K. Sharma (CPCB Western Zone)</div>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                playFeedbackChime('beep');
-                setCurrentView('recycler');
-              }}
-              className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Switch to Recycler ERP View"
-            >
-              <Building2 className="w-3.5 h-3.5 text-emerald-700" />
-              <span>Recycler ERP</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                playFeedbackChime('beep');
-                setCurrentView('collector');
-              }}
-              className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Switch to Collector Saathi View"
-            >
-              <span>Collector App</span>
-            </button>
             <button
               type="button"
               onClick={() => {
@@ -148,6 +126,18 @@ export const GovernmentAuditPortal: React.FC = () => {
             >
               <Headphones className="w-3.5 h-3.5" />
               <span>Gov Help Desk</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                playFeedbackChime('beep');
+                setCurrentView('gateway');
+              }}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:border-rose-200 text-slate-700 hover:text-rose-700 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Logout from Government Auditor Portal"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Logout</span>
             </button>
           </div>
         </div>

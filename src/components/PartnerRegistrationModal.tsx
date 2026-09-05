@@ -11,7 +11,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { REGULATORY_AUTHORITIES } from '../data/mockData';
+import { REGULATORY_AUTHORITIES } from '../data/authoritiesAndTransactionsData';
 import { playFeedbackChime } from '../utils/speech';
 
 interface PartnerRegistrationModalProps {
@@ -70,14 +70,14 @@ export const PartnerRegistrationModal: React.FC<PartnerRegistrationModalProps> =
         contactPhone: phone.trim(),
         city: city.trim(),
         state: currentAuthority.state,
-        statePcb: `${currentAuthority.shortName} (${currentAuthority.state})`,
+        statePcb: `${currentAuthority.code} (${currentAuthority.state})`,
         ward: ward.trim(),
         facilityAddress: `${ward.trim()}, ${city.trim()}`,
         bankUpi: bankUpi.trim(),
         contactEmail: bankUpi.trim(),
         tier,
-        aadhaarOrGst: licenseOrGst.trim() || `${currentAuthority.shortName}-CTO-2026-APPLIED`,
-        spcbLicenseNo: licenseOrGst.trim() || `${currentAuthority.shortName}-EW-${Math.floor(1000 + Math.random() * 9000)}`,
+        aadhaarOrGst: licenseOrGst.trim() || `${currentAuthority.code}-CTO-2026-APPLIED`,
+        spcbLicenseNo: licenseOrGst.trim() || `${currentAuthority.code}-EW-${Math.floor(1000 + Math.random() * 9000)}`,
         registeredByAuthorityId: currentAuthority.id,
         partnerType,
         annualCapacityMetricTons: annualCapacity,
@@ -297,7 +297,7 @@ export const PartnerRegistrationModal: React.FC<PartnerRegistrationModalProps> =
                 >
                   {REGULATORY_AUTHORITIES.map((auth) => (
                     <option key={auth.id} value={auth.id}>
-                      {auth.shortName} ({auth.state})
+                      {auth.code} ({auth.state})
                     </option>
                   ))}
                 </select>

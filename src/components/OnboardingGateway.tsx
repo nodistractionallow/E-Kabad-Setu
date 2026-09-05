@@ -749,6 +749,17 @@ export const OnboardingGateway: React.FC = () => {
                   <span>{t.loginRecyclerBtn}</span>
                   <ArrowRight className="w-5 h-5" />
                 </button>
+
+                <div className="pt-3 text-center border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowPartnerModal(true)}
+                    className="text-xs text-emerald-700 hover:text-emerald-800 font-bold hover:underline inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Building2 className="w-3.5 h-3.5" />
+                    <span>New Facility / Scrap Aggregator? Apply for Partner Accreditation →</span>
+                  </button>
+                </div>
               </form>
 
             </div>
@@ -787,6 +798,12 @@ export const OnboardingGateway: React.FC = () => {
           </div>
         </div>
       </footer>
+
+      {/* Partner Registration Modal */}
+      <PartnerRegistrationModal
+        isOpen={showPartnerModal}
+        onClose={() => setShowPartnerModal(false)}
+      />
     </div>
   );
 };

@@ -6,6 +6,7 @@ import { playFeedbackChime } from '../utils/speech';
 import { LiveCameraViewfinder, analyzeImageForSafety } from './LiveCameraViewfinder';
 import { CollectorOrdersManagement } from './CollectorOrdersManagement';
 import { LotPriceHistoryModal } from './LotPriceHistoryModal';
+import { NewOrderQrModal } from './NewOrderQrModal';
 import { QRCodeSVG } from 'qrcode.react';
 
 import { 
@@ -64,7 +65,8 @@ export const CollectorMobileApp: React.FC = () => {
     speak, 
     stopAudio,
     categoryRequests,
-    requestNewCategory
+    requestNewCategory,
+    setActivePublicOrderId
   } = useApp();
 
   // Active bottom navigation tab
@@ -86,6 +88,7 @@ export const CollectorMobileApp: React.FC = () => {
   const [customWeight, setCustomWeight] = useState<number>(5.0);
   const [showQrModal, setShowQrModal] = useState<boolean>(false);
   const [savedSuccessBanner, setSavedSuccessBanner] = useState<boolean>(false);
+  const [newOrderLotForModal, setNewOrderLotForModal] = useState<any>(null);
 
   // Passbook payment mode filter
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'UPI' | 'CASH'>('ALL');
@@ -428,7 +431,7 @@ export const CollectorMobileApp: React.FC = () => {
 
     const createdLotId = `LOT-2026-EW-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    addLot({
+    const newCreatedLot = {
       id: createdLotId,
       collectorId: collector.id,
       collectorName: collector.name,
@@ -442,20 +445,26 @@ export const CollectorMobileApp: React.FC = () => {
       weightKg: customWeight,
       ratePerKg: rateToUse,
       totalAmount: lotTotal,
+      status: 'pending' as const,
+      timestamp: new Date().toISOString(),
       gpsLocation: '18.5204° N, 73.8567° E (Ward 12, Pune)',
       facilityId: 'REC-MH-PN-004',
       facilityName: aiResult?.recommendedRecycler || 'EcoMetals CPCB Unit #4',
       distanceKm: 3.8,
       hazardFlag: isHazard,
       hazardNote: isHazard ? (aiResult?.hazardWarning || selectedMaterial.hazardWarning_hi) : undefined,
-      photoUrl: livePhoto,
+      photoUrl: livePhoto || undefined,
       photos: {
-        topView: livePhoto,
+        topView: livePhoto || undefined,
       },
       requiresSticker: false,
       isOfflineCreated: !isOnline,
       needsOnlineAiCategorization: !isOnline
-    });
+    };
+
+    addLot(newCreatedLot);
+    setActiveCreatedLot(newCreatedLot);
+    setNewOrderLotForModal(newCreatedLot);
 
     if (isOutCat) {
       // Auto-submit CPCB category approval request
@@ -1690,12 +1699,7 @@ export const CollectorMobileApp: React.FC = () => {
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-4">
               <div className="w-48 h-48 bg-white p-2.5 rounded-xl flex flex-col items-center justify-center relative border border-slate-200">
                 <QRCodeSVG 
-                  value={JSON.stringify({
-                    lotId: activeCreatedLot.id,
-                    collectorId: collector.id,
-                    material: activeCreatedLot.materialName,
-                    weight: activeCreatedLot.weightKg
-                  })} 
+                  value={`https://e-kabad-setu.vercel.app/?orderId=${encodeURIComponent(activeCreatedLot.id)}&view=order_status`} 
                   size={170} 
                   level={"H"}
                   includeMargin={false}
@@ -1706,6 +1710,9 @@ export const CollectorMobileApp: React.FC = () => {
                     SETU
                   </div>
                 </div>
+              </div>
+              <div className="mt-2 text-[10px] font-mono text-emerald-800 font-bold">
+                e-kabad-setu.vercel.app
               </div>
             </div>
 
@@ -1732,15 +1739,40 @@ export const CollectorMobileApp: React.FC = () => {
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setShowQrModal(false)}
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs cursor-pointer"
-            >
-              {t.close}
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowQrModal(false);
+                  setActivePublicOrderId(activeCreatedLot.id);
+                }}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs cursor-pointer text-xs flex items-center justify-center gap-1.5"
+              >
+                <span>View Live Order Status Page ↗</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowQrModal(false)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl cursor-pointer text-xs"
+              >
+                {t.close}
+              </button>
+            </div>
           </div>
         </div>
+      )}
+
+      {/* New Order QR Code Popup on Pending / Orders Screen */}
+      {newOrderLotForModal && (
+        <NewOrderQrModal
+          lot={newOrderLotForModal}
+          isOpen={Boolean(newOrderLotForModal)}
+          onClose={() => setNewOrderLotForModal(null)}
+          onViewTrackingPage={(id) => {
+            setNewOrderLotForModal(null);
+            setActivePublicOrderId(id);
+          }}
+        />
       )}
 
       {/* 5-Tab Persistent Bottom Navigation Bar */}
