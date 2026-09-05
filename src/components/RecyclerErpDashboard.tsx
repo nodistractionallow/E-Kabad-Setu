@@ -1022,7 +1022,7 @@ export const RecyclerErpDashboard: React.FC = () => {
                           <td className="py-3.5 px-4 flex items-center gap-3">
                             <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold overflow-hidden shrink-0 ${isSelected ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-800 border border-indigo-200'}`}>
                               {vendor.id === 'KBD-MH-4402' ? (
-                                <img src="https://images.unsplash.com/photo-1544717305-2782549b5136?w=200&auto=format&fit=crop&q=80" alt="Avatar" className="w-full h-full object-cover" />
+                                <img src="https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=400&auto=format&fit=crop&q=80" alt="Avatar" className="w-full h-full object-cover" />
                               ) : (
                                 <User className="w-4 h-4" />
                               )}

@@ -468,12 +468,25 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                             <span>{declaredWeight} kg</span>
                           )}
                         </div>
-                        <div className="text-[10px] text-slate-500">
-                          ₹{lot.ratePerKg}/kg
-                        </div>
-                        <div className="text-xs font-extrabold text-emerald-700 mt-0.5">
-                          ₹{lotAmount.toLocaleString('en-IN')}
-                        </div>
+                        {lot.isOutOfCategory || lot.isPendingCategoryApproval ? (
+                          <>
+                            <div className="text-[10px] text-amber-700 font-semibold">
+                              Rate: CPCB TBD
+                            </div>
+                            <div className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded mt-0.5 inline-block">
+                              Price will be decided later
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-[10px] text-slate-500">
+                              ₹{lot.ratePerKg}/kg
+                            </div>
+                            <div className="text-xs font-extrabold text-emerald-700 mt-0.5">
+                              ₹{lotAmount.toLocaleString('en-IN')}
+                            </div>
+                          </>
+                        )}
                       </td>
 
                       {/* Column 4: Facility & Status */}
@@ -487,7 +500,12 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
 
                         {/* Status Badge */}
                         <div className="mt-1 flex flex-col gap-1">
-                          {lot.needsOnlineAiCategorization ? (
+                          {lot.isOutOfCategory || lot.isPendingCategoryApproval ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-400">
+                              <Clock className="w-2.5 h-2.5 text-amber-700 animate-pulse" />
+                              <span>CPCB Category Approval Pending</span>
+                            </span>
+                          ) : lot.needsOnlineAiCategorization ? (
                             <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-800 border border-cyan-300">
                               <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-ping"></span>
                               <span>Pending AI Classification</span>
@@ -770,11 +788,19 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
             <div className="bg-slate-50 rounded-2xl p-3 text-left border border-slate-200 text-xs space-y-1.5 font-mono mb-4">
               <div className="flex justify-between">
                 <span className="text-slate-500">Weight & Rate:</span>
-                <span className="text-slate-900 font-bold">{viewingQrLot.weightKg} kg @ ₹{viewingQrLot.ratePerKg}/kg</span>
+                <span className="text-slate-900 font-bold">
+                  {viewingQrLot.isOutOfCategory || viewingQrLot.isPendingCategoryApproval
+                    ? `${viewingQrLot.weightKg} kg (CPCB Tariff Pending)`
+                    : `${viewingQrLot.weightKg} kg @ ₹${viewingQrLot.ratePerKg}/kg`}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Declared Valuation:</span>
-                <span className="text-emerald-700 font-extrabold">₹{viewingQrLot.totalAmount}</span>
+                <span className="text-amber-800 font-extrabold">
+                  {viewingQrLot.isOutOfCategory || viewingQrLot.isPendingCategoryApproval
+                    ? 'Price will be decided later'
+                    : `₹${viewingQrLot.totalAmount}`}
+                </span>
               </div>
               <div className="flex justify-between border-t border-slate-200 pt-1">
                 <span className="text-slate-500">Destination:</span>

@@ -957,9 +957,53 @@ export const SAFETY_PRACTICES = [
     dontWhy_en: 'Causes sudden exothermic thermal runaway fire burning at over 800°C.',
     do_hi: 'टर्मिनल पर टेप लगाकर वर्मीक्यूलाइट सेफ्टी बैग में रखें',
     do_mr: 'टर्मिनलवर टेप लावा आणि व्हर्मिक्युलाईट सुरक्षेच्या पिशवीत ठेवा',
-    do_en: 'Insulate electrical terminals and transport inside vermiculite pouches',
-    audioText_hi: 'फूली हुई बैटरी को कतई न फोड़ें। इसे वर्मीक्यूलाइट सेफ्टी पाउच में रखें।',
-    audioText_mr: 'फुगलेली बॅटरी कधीही फोडू नका. सुरक्षेच्या व्हर्मिक्युलाईट पिशवीत ठेवा.',
-    audioText_en: 'Never puncture or hammer swollen batteries. Transport inside fire-retardant vermiculite pouches.'
+    do_en: 'Insulate electrical terminals and transport inside vermiculite pouches'
   }
 ];
+
+export const CPCB_STANDARD_CATEGORIES = [
+  { id: 'pcb', name: 'Printed Circuit Boards & Motherboards', name_hi: 'सर्किट बोर्ड व मदरबोर्ड', name_mr: 'सर्किट बोर्ड व मदरबोर्ड', code: 'CPCB-SCH-I-PCB', baseRate: 480, description: 'Server, telecom, laptop, smartphone PCBs and gold contact motherboards' },
+  { id: 'copper', name: 'Insulated & Bare Copper Wires', name_hi: 'तांबे के तार व वाइंडिंग', name_mr: 'तांब्याची वायर व वाइंडिंग', code: 'CPCB-SCH-I-CU', baseRate: 720, description: 'Transformer coils, harness cables, electric motor windings (unburnt)' },
+  { id: 'battery', name: 'Lithium & Lead-Acid Batteries', name_hi: 'लिथियम व लेड-एसिड बैटरी', name_mr: 'लिथियम व लेड-ॲसिड बॅटरी', code: 'CPCB-SCH-I-BAT', baseRate: 310, description: 'EV battery modules, power banks, laptop Li-ion packs, telecom backup cells' },
+  { id: 'crt', name: 'CRT Displays & Leaded Glass Tubes', name_hi: 'सीआरटी डिस्प्ले व ग्लास', name_mr: 'सीआरटी डिस्प्ले व ग्लास', code: 'CPCB-SCH-I-CRT', baseRate: 45, description: 'Cathode ray television tubes, oscilloscope monitors, lead-silicate funnel glass' },
+  { id: 'lcd', name: 'LCD / LED Display Modules', name_hi: 'एलसीडी / एलईडी पैनल', name_mr: 'एलसीडी / एलईडी पॅनेल', code: 'CPCB-SCH-I-LCD', baseRate: 180, description: 'Smart TV screens, laptop display assemblies, CCFL backlit and edge-lit LED panels' },
+  { id: 'magnet', name: 'Rare Earth Neodymium Magnets', name_hi: 'नियोडिमियम चुंबक हार्ड ड्राइव', name_mr: 'निओडिमियम चुंबक हार्ड ड्राइव्ह', code: 'CPCB-SCH-I-MAG', baseRate: 540, description: 'HDD voice coil actuators, BLDC drone motors, NdFeB alloy magnets' },
+  { id: 'plastic', name: 'Flame-Retardant E-Plastics', name_hi: 'ई-प्लास्टिक केसिंग (ABS-FR)', name_mr: 'ई-प्लास्टिक केसिंग (ABS-FR)', code: 'CPCB-SCH-I-PLAS', baseRate: 65, description: 'Computer enclosures, printer bodies, halogen-free engineering polymer scrap' },
+  { id: 'mixed', name: 'Dismantled Small Appliances / Mix', name_hi: 'मिश्रित छोटे इलेक्ट्रॉनिक उपकरण', name_mr: 'मिश्रित लहान उपकरणे', code: 'CPCB-SCH-I-MIX', baseRate: 120, description: 'Chargers, adapters, routers, telecom modems, mixed small e-scrap' }
+];
+
+export const INITIAL_CATEGORY_REQUESTS = [
+  {
+    id: 'CAT-REQ-2026-081',
+    collectorId: 'KBD-MH-4402',
+    collectorName: 'रामसेवक कांबळे (Ram Sevak)',
+    collectorPhone: '+91 98234 56789',
+    categoryName: 'Solar Inverter IGBT Power Modules',
+    suggestedRatePerKg: 520,
+    weightKg: 18.5,
+    samplePhotoUrl: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500&auto=format&fit=crop&q=80',
+    description: 'High-amperage solar inverter thyristor and IGBT switching modules with heavy copper heat sinks and silver contacts collected from industrial solar farm decommission.',
+    status: 'pending' as const,
+    timestamp: '2026-09-04 11:20 AM',
+    lotId: 'LOT-REQ-PENDING-001'
+  },
+  {
+    id: 'CAT-REQ-2026-079',
+    collectorId: 'KBD-MH-3108',
+    collectorName: 'संतोष यादव (Santosh Yadav)',
+    collectorPhone: '+91 97112 34509',
+    categoryName: 'Fiber Optic Laser Transceiver SFP+ Modules',
+    suggestedRatePerKg: 680,
+    weightKg: 6.2,
+    samplePhotoUrl: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=500&auto=format&fit=crop&q=80',
+    description: 'Gold-plated 10G SFP+ optical transceivers and InP laser diode assemblies from telecom datacentre swap.',
+    status: 'approved' as const,
+    timestamp: '2026-09-03 03:15 PM',
+    reviewedBy: 'Dr. V. K. Sharma (CPCB Regional Director)',
+    reviewNotes: 'Classified under High-Yield PCB/Optoelectronic schedule. Approved tariff rate at ₹650/kg.',
+    approvedRatePerKg: 650,
+    assignedStandardCategory: 'pcb',
+    lotId: 'LOT-2026-EW-9023'
+  }
+];
+

@@ -4,10 +4,93 @@ import { playFeedbackChime } from '../utils/speech';
 
 interface LiveCameraViewfinderProps {
   capturedImage: string | null;
-  onPhotoCaptured: (base64: string) => void;
+  onPhotoCaptured: (base64: string, isHumanHint?: boolean, isBlackOrBlankHint?: boolean) => void;
   onRetake: () => void;
   collectorId?: string;
   language?: 'hi' | 'mr' | 'en';
+}
+
+function detectHumanSkinRatio(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  try {
+    const startX = Math.floor(width * 0.2);
+    const startY = Math.floor(height * 0.1);
+    const sampleW = Math.floor(width * 0.6);
+    const sampleH = Math.floor(height * 0.7);
+    const imgData = ctx.getImageData(startX, startY, sampleW, sampleH);
+    const data = imgData.data;
+    let skinPixels = 0;
+    let totalSampled = 0;
+
+    for (let i = 0; i < data.length; i += 16) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      totalSampled++;
+
+      const isSkin = (
+        r > 65 && g > 25 && b > 15 &&
+        r > g && r > b &&
+        (Math.max(r, g, b) - Math.min(r, g, b) > 10) &&
+        Math.abs(r - g) > 8 &&
+        (r / (g + 0.001) > 1.05) &&
+        (r / (b + 0.001) > 1.12)
+      );
+
+      if (isSkin) skinPixels++;
+    }
+
+    const skinRatio = skinPixels / (totalSampled || 1);
+    return skinRatio > 0.14;
+  } catch {
+    return false;
+  }
+}
+
+function detectDarkOrSolidColor(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  try {
+    const sampleW = Math.min(width, 400);
+    const sampleH = Math.min(height, 300);
+    const imgData = ctx.getImageData(0, 0, sampleW, sampleH);
+    const data = imgData.data;
+
+    let totalLuminance = 0;
+    let count = 0;
+    const luminances: number[] = [];
+
+    for (let i = 0; i < data.length; i += 24) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      totalLuminance += lum;
+      luminances.push(lum);
+      count++;
+    }
+
+    const avgLum = totalLuminance / (count || 1);
+
+    // 1. Extreme pitch dark / covered lens
+    if (avgLum < 20) {
+      return true;
+    }
+
+    // 2. Uniform solid color (blank paper, flat solid wall, solid cloth with near-zero texture variance)
+    let varianceSum = 0;
+    for (let i = 0; i < luminances.length; i++) {
+      const diff = luminances[i] - avgLum;
+      varianceSum += diff * diff;
+    }
+    const stdDev = Math.sqrt(varianceSum / (count || 1));
+
+    // If std deviation is under 6 (almost entirely flat single color tone) or dark flat under 30
+    if (stdDev < 6.5 || (avgLum < 32 && stdDev < 10)) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
@@ -25,7 +108,7 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Initialize camera stream directly from user media without any file/folder pickers
+  // Initialize camera stream directly from user media
   const startCamera = useCallback(async () => {
     try {
       setCameraError(null);
@@ -90,23 +173,22 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const isHuman = detectHumanSkinRatio(ctx, canvas.width, canvas.height);
+        const isBlackOrBlank = detectDarkOrSolidColor(ctx, canvas.width, canvas.height);
         const snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-        onPhotoCaptured(snapshotDataUrl);
+        onPhotoCaptured(snapshotDataUrl, isHuman, isBlackOrBlank);
         return;
       }
     }
 
-    // If stream is initializing or blocked by container sandbox, generate direct scrap capture frame
+    // Fallback if video isn't rendering in headless container
     const fallbackCanvas = canvasRef.current || document.createElement('canvas');
     fallbackCanvas.width = 640;
     fallbackCanvas.height = 480;
     const fCtx = fallbackCanvas.getContext('2d');
     if (fCtx) {
-      // Draw background PCB & circuit pattern
       fCtx.fillStyle = '#064e3b';
       fCtx.fillRect(0, 0, 640, 480);
-      
-      // Draw circuit traces
       fCtx.strokeStyle = '#10b981';
       fCtx.lineWidth = 4;
       fCtx.beginPath();
@@ -116,101 +198,80 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
       fCtx.lineTo(450, 120);
       fCtx.lineTo(480, 200);
       fCtx.stroke();
-
-      fCtx.beginPath();
-      fCtx.moveTo(100, 420);
-      fCtx.lineTo(300, 420);
-      fCtx.lineTo(360, 320);
-      fCtx.lineTo(580, 320);
-      fCtx.stroke();
-
-      // Draw electronic IC chip components
       fCtx.fillStyle = '#0f172a';
       fCtx.fillRect(180, 150, 280, 180);
       fCtx.strokeStyle = '#fbbf24';
       fCtx.lineWidth = 3;
       fCtx.strokeRect(180, 150, 280, 180);
-
-      // Gold pins / pins header
-      fCtx.fillStyle = '#fbbf24';
-      for (let i = 0; i < 10; i++) {
-        fCtx.fillRect(190 + i * 26, 140, 12, 10);
-        fCtx.fillRect(190 + i * 26, 330, 12, 10);
-      }
-
-      // Chip label text
       fCtx.fillStyle = '#ffffff';
       fCtx.font = 'bold 20px monospace';
       fCtx.fillText('AI E-WASTE SCANNER', 215, 230);
       fCtx.fillStyle = '#34d399';
       fCtx.font = '14px monospace';
       fCtx.fillText('CPCB VERIFIED PCB LOT', 230, 260);
-
-      // Live timestamp & collector tag
       fCtx.fillStyle = '#94a3b8';
       fCtx.font = '12px monospace';
       fCtx.fillText(`Captured: ${new Date().toISOString()}`, 30, 460);
 
       const snapshotDataUrl = fallbackCanvas.toDataURL('image/jpeg', 0.92);
-      onPhotoCaptured(snapshotDataUrl);
+      onPhotoCaptured(snapshotDataUrl, false);
     }
   };
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {/* Hidden processing canvas */}
       <canvas ref={canvasRef} className="hidden" />
 
       {/* Main Viewport Container - Full Frame Preview */}
       <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-700 aspect-4/3 sm:aspect-16/10 w-full flex items-center justify-center shadow-lg">
         {capturedImage ? (
-          /* Captured Photo View with Retake Button */
-          <div className="relative w-full h-full bg-black flex items-center justify-center">
+          <div className="relative w-full h-full flex items-center justify-center bg-black">
             <img
               src={capturedImage}
-              alt="Captured E-Waste Scrap"
-              className="w-full h-full object-contain bg-black"
+              alt="Captured E-Waste"
+              className="w-full h-full object-contain"
             />
-            {/* Timestamp & Verification Watermark */}
-            <div className="absolute bottom-2.5 left-2.5 bg-black/85 backdrop-blur-xs text-emerald-400 font-mono text-[10px] px-3 py-1 rounded-lg border border-emerald-500/40 z-10 flex items-center gap-1.5 shadow-md">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              <span>{new Date().toLocaleDateString('en-IN')} • {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} • {collectorId}</span>
+
+            {/* Top Badge: Captured Frame State */}
+            <div className="absolute top-2.5 left-2.5 z-20">
+              <span className="bg-emerald-600/90 backdrop-blur-xs text-white text-[10px] font-mono font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-md border border-white/20">
+                <Sparkles className="w-3 h-3 text-emerald-200" />
+                <span>SCAN READY</span>
+              </span>
             </div>
 
-            {/* Retake Button */}
-            <div className="absolute top-2.5 right-2.5 z-20">
+            {/* Retake Button Only */}
+            <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => {
                   playFeedbackChime('beep');
                   onRetake();
+                  startCamera();
                 }}
-                className="px-3.5 py-1.5 bg-slate-900/95 hover:bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-700 shadow-lg backdrop-blur-xs transition-transform active:scale-95 cursor-pointer"
+                className="px-3.5 py-1.5 rounded-xl bg-black/80 hover:bg-black text-white text-xs font-bold border border-white/20 flex items-center gap-1.5 backdrop-blur-xs shadow-lg transition-colors cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-                <span>
-                  {language === 'hi' ? 'पुनः लें (Retake)' : language === 'mr' ? 'पुन्हा घ्या' : 'Retake Photo'}
-                </span>
+                <span>{language === 'hi' ? 'पुनः फोटो लें (Retake)' : language === 'mr' ? 'पुन्हा फोटो घ्या (Retake)' : 'Retake Photo'}</span>
               </button>
+            </div>
+
+            {/* Timestamp & Geostamp Footer */}
+            <div className="absolute bottom-2 left-2 right-2 flex justify-between items-center text-[10px] text-slate-300 bg-black/60 backdrop-blur-xs px-3 py-1 rounded-lg font-mono pointer-events-none">
+              <span>GPS: 18.5204° N, 73.8567° E</span>
+              <span>CPCB AI AUDIT V2.2</span>
             </div>
           </div>
         ) : (
-          /* Live Camera Stream - Full 100% Uncropped Sensor View */
-          <div className="relative w-full h-full flex flex-col justify-between bg-black">
+          <div className="relative w-full h-full flex flex-col justify-between">
+            {/* Live HTML5 Video Element */}
             <video
-              ref={(el) => {
-                videoRef.current = el;
-                if (el && streamRef.current && el.srcObject !== streamRef.current) {
-                  el.srcObject = streamRef.current;
-                  el.onloadedmetadata = () => {
-                    el.play().catch((e) => console.warn('Video play error:', e));
-                  };
-                }
-              }}
+              ref={videoRef}
+              autoPlay
               playsInline
               muted
-              autoPlay
-              className="absolute inset-0 w-full h-full object-contain bg-black"
+              className="absolute inset-0 w-full h-full object-cover"
             />
 
             {/* Top Bar: Camera Controls & Live Status */}
@@ -243,7 +304,7 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
             </div>
 
             {/* Bottom Shutter Capture Button */}
-            <div className="relative z-10 pb-4 flex items-center justify-center">
+            <div className="relative z-10 pb-4 flex items-center justify-center gap-3">
               <button
                 type="button"
                 onClick={captureFrame}

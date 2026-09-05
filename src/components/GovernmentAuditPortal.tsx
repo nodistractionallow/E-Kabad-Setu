@@ -17,20 +17,26 @@ import {
   CheckCircle2,
   Lock,
   Search,
-  ChevronRight
+  ChevronRight,
+  FolderOpen,
+  Folder
 } from 'lucide-react';
 import { DatasetsExplorerModal } from './DatasetsExplorerModal';
 import { FieldResearchModal } from './FieldResearchModal';
 import { UnitEconomicsModal } from './UnitEconomicsModal';
+import { CpcbCategoryApprovalsDesk } from './CpcbCategoryApprovalsDesk';
+import { GovernmentTransactionLedger } from './GovernmentTransactionLedger';
 import { playFeedbackChime } from '../utils/speech';
 
 export const GovernmentAuditPortal: React.FC = () => {
-  const { setCurrentView, lots, recycler } = useApp();
+  const { setCurrentView, lots, recycler, categoryRequests } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'datasets' | 'field_research' | 'unit_economics' | 'state_audit'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'transactions_ledger' | 'category_approvals' | 'datasets' | 'field_research' | 'unit_economics' | 'state_audit'>('transactions_ledger');
   const [showDatasetsModal, setShowDatasetsModal] = useState(false);
   const [showFieldResearchModal, setShowFieldResearchModal] = useState(false);
   const [showUnitEconomicsModal, setShowUnitEconomicsModal] = useState(false);
+
+  const pendingRequestsCount = categoryRequests.filter(r => r.status === 'pending').length;
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 font-sans">
@@ -119,11 +125,13 @@ export const GovernmentAuditPortal: React.FC = () => {
       <div className="bg-slate-950 border-b border-slate-800 px-6 sticky top-[73px] z-20">
         <div className="max-w-7xl mx-auto flex space-x-2 overflow-x-auto py-2">
           {[
-            { id: 'overview', label: '1. National Regulatory Overview', icon: ShieldCheck },
-            { id: 'datasets', label: '2. Field Datasets & Schemas', icon: Database },
-            { id: 'field_research', label: '3. Field Usability Research', icon: BookOpen },
-            { id: 'unit_economics', label: '4. Macro Unit Economics Model', icon: Calculator },
-            { id: 'state_audit', label: '5. State PCB Compliance Ledger', icon: Layers }
+            { id: 'transactions_ledger', label: '1. Vendor-to-Collector Transactions & Folders', icon: FolderOpen, highlight: true },
+            { id: 'overview', label: '2. National Regulatory Overview', icon: ShieldCheck },
+            { id: 'category_approvals', label: `3. CPCB Category Approval Desk ${pendingRequestsCount > 0 ? `(${pendingRequestsCount} PENDING)` : ''}`, icon: Award, hasBadge: pendingRequestsCount > 0 },
+            { id: 'datasets', label: '4. Field Datasets & Schemas', icon: Database },
+            { id: 'field_research', label: '5. Field Usability Research', icon: BookOpen },
+            { id: 'unit_economics', label: '6. Macro Unit Economics Model', icon: Calculator },
+            { id: 'state_audit', label: '7. State PCB Compliance Ledger', icon: Layers }
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -135,14 +143,19 @@ export const GovernmentAuditPortal: React.FC = () => {
                   playFeedbackChime('beep');
                   setActiveTab(tab.id as typeof activeTab);
                 }}
-                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all ${
+                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
                   isActive 
                     ? 'bg-emerald-600 text-white shadow-md' 
+                    : tab.hasBadge
+                    ? 'bg-amber-950/60 border border-amber-500/50 text-amber-300 hover:bg-amber-900/60'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
                 <span>{tab.label}</span>
+                {tab.hasBadge && (
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                )}
               </button>
             );
           })}
@@ -151,6 +164,20 @@ export const GovernmentAuditPortal: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="max-w-7xl mx-auto px-6 py-6">
+        {/* TAB 1: VENDOR-TO-COLLECTOR TRANSACTIONS & AUTHORITY FOLDERS */}
+        {activeTab === 'transactions_ledger' && (
+          <div className="animate-fadeIn">
+            <GovernmentTransactionLedger lots={lots} />
+          </div>
+        )}
+
+        {/* TAB: CPCB CATEGORY APPROVAL DESK */}
+        {activeTab === 'category_approvals' && (
+          <div className="animate-fadeIn">
+            <CpcbCategoryApprovalsDesk />
+          </div>
+        )}
+
         {/* TAB 1: OVERVIEW */}
         {activeTab === 'overview' && (
           <div className="space-y-6">

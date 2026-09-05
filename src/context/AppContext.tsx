@@ -8,8 +8,8 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility } from '../types';
-import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, MOCK_RECYCLER } from '../data/mockData';
+import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility, CategoryApprovalRequest } from '../types';
+import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, MOCK_RECYCLER, INITIAL_CATEGORY_REQUESTS } from '../data/mockData';
 import { speakVoice, playFeedbackChime, stopVoice } from '../utils/speech';
 
 interface AppContextType {
@@ -24,12 +24,16 @@ interface AppContextType {
   recycler: RecyclerFacility;
   materials: MaterialItem[];
   lots: EWasteLot[];
+  categoryRequests: CategoryApprovalRequest[];
   activeCreatedLot: EWasteLot | null;
   setActiveCreatedLot: (lot: EWasteLot | null) => void;
   addLot: (lot: Omit<EWasteLot, 'id' | 'timestamp' | 'status'>) => Promise<EWasteLot>;
   approveAndPayLot: (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH') => Promise<void>;
   rejectLot: (lotId: string, reason: string) => Promise<void>;
   reopenLot?: (lotId: string) => Promise<void>;
+  requestNewCategory: (req: Omit<CategoryApprovalRequest, 'id' | 'timestamp' | 'status'>) => Promise<CategoryApprovalRequest>;
+  approveCategoryRequest: (requestId: string, approvedRatePerKg: number, assignedStandardCategory: string, reviewNotes?: string, reviewedBy?: string) => Promise<void>;
+  rejectCategoryRequest: (requestId: string, rejectionReason: string, reviewedBy?: string) => Promise<void>;
   updateMaterialPrice: (materialId: string, newPrice: number) => Promise<void>;
   addCustomMaterial: (material: MaterialItem) => Promise<void>;
   syncPendingAiClassifications: () => Promise<void>;
@@ -47,9 +51,12 @@ const STORAGE_KEYS = {
   LANG: 'ekabad_lang_v1',
   LOTS: 'ekabad_lots_v1',
   MATERIALS: 'ekabad_materials_v1',
-  COLLECTOR: 'ekabad_collector_v1',
-  ONLINE: 'ekabad_online_v1'
+  COLLECTOR: 'ekabad_collector_v2',
+  ONLINE: 'ekabad_online_v1',
+  CATEGORY_REQUESTS: 'ekabad_cat_requests_v1'
 };
+
+const DEFAULT_MALE_COLLECTOR_PHOTO = 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=400&auto=format&fit=crop&q=80';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentView, setCurrentView] = useState<UserRole>(() => {
@@ -95,10 +102,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
+  const [categoryRequests, setCategoryRequests] = useState<CategoryApprovalRequest[]>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.CATEGORY_REQUESTS);
+      return stored ? JSON.parse(stored) : INITIAL_CATEGORY_REQUESTS;
+    } catch {
+      return INITIAL_CATEGORY_REQUESTS;
+    }
+  });
+
   const [collector, setCollector] = useState<CollectorProfile>(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEYS.COLLECTOR);
-      return stored ? JSON.parse(stored) : MOCK_COLLECTOR;
+      const stored = localStorage.getItem(STORAGE_KEYS.COLLECTOR) || localStorage.getItem('ekabad_collector_v1');
+      if (stored) {
+        const parsed = JSON.parse(stored) as CollectorProfile;
+        // Cleanse any legacy cached female photo
+        if (!parsed.selfieUrl || parsed.selfieUrl.includes('1544717305') || parsed.selfieUrl.includes('1544724569') || parsed.selfieUrl.includes('1544716278')) {
+          parsed.selfieUrl = DEFAULT_MALE_COLLECTOR_PHOTO;
+        }
+        return parsed;
+      }
+      return MOCK_COLLECTOR;
     } catch {
       return MOCK_COLLECTOR;
     }
@@ -173,11 +197,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [collector]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.CATEGORY_REQUESTS, JSON.stringify(categoryRequests));
+    } catch (e) {
+      console.warn('LocalStorage error:', e);
+    }
+  }, [categoryRequests]);
+
   // Real-time Firebase Firestore synchronization across all devices and browsers
   useEffect(() => {
     let unsubscribeLots: (() => void) | undefined;
     let unsubscribeMaterials: (() => void) | undefined;
     let unsubscribeCollector: (() => void) | undefined;
+    let unsubscribeCatRequests: (() => void) | undefined;
 
     try {
       setIsFirebaseSyncing(true);
@@ -246,11 +279,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn('Firestore materials listener notice:', error);
       });
 
-      // 3. Real-time Collector Profile listener
+      // 3. Real-time Category Requests listener
+      const catRequestsCollectionRef = collection(db, 'category_requests');
+      unsubscribeCatRequests = onSnapshot(catRequestsCollectionRef, async (snapshot) => {
+        if (!snapshot.empty) {
+          const loadedReqs: CategoryApprovalRequest[] = [];
+          snapshot.forEach((docSnap) => {
+            loadedReqs.push({
+              ...(docSnap.data() as CategoryApprovalRequest),
+              id: docSnap.id
+            });
+          });
+          loadedReqs.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+          setCategoryRequests(loadedReqs);
+        } else {
+          // Seed initial category requests to Firestore
+          try {
+            const batch = writeBatch(db);
+            INITIAL_CATEGORY_REQUESTS.forEach((req) => {
+              const docRef = doc(db, 'category_requests', req.id);
+              batch.set(docRef, req, { merge: true });
+            });
+            await batch.commit();
+          } catch (err) {
+            console.warn('Firestore category_requests seed notice:', err);
+          }
+        }
+      }, (error) => {
+        console.warn('Firestore category requests listener notice:', error);
+      });
+
+      // 4. Real-time Collector Profile listener
       const collectorDocRef = doc(db, 'collectors', MOCK_COLLECTOR.id);
       unsubscribeCollector = onSnapshot(collectorDocRef, (docSnap) => {
         if (docSnap.exists()) {
-          setCollector(docSnap.data() as CollectorProfile);
+          const colData = docSnap.data() as CollectorProfile;
+          if (!colData.selfieUrl || colData.selfieUrl.includes('1544717305') || colData.selfieUrl.includes('1544724569') || colData.selfieUrl.includes('1544716278')) {
+            colData.selfieUrl = DEFAULT_MALE_COLLECTOR_PHOTO;
+            setDoc(collectorDocRef, colData, { merge: true }).catch(console.warn);
+          }
+          setCollector(colData);
         } else {
           // Seed collector profile
           setDoc(collectorDocRef, MOCK_COLLECTOR, { merge: true }).catch(console.warn);
@@ -403,6 +471,226 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (err) {
       console.warn('Firestore rejectLot error, cached locally:', err);
+    }
+
+    playFeedbackChime('warning');
+  };
+
+  const requestNewCategory = async (reqData: Omit<CategoryApprovalRequest, 'id' | 'timestamp' | 'status'>): Promise<CategoryApprovalRequest> => {
+    const newReqId = `CAT-REQ-2026-${Math.floor(100 + Math.random() * 900)}`;
+    const nowStr = new Date().toLocaleString('en-IN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    const newRequest: CategoryApprovalRequest = {
+      ...reqData,
+      id: newReqId,
+      status: 'pending',
+      timestamp: nowStr
+    };
+
+    setCategoryRequests((prev) => [newRequest, ...prev]);
+
+    // If associated with a lotId, mark that lot as pending category approval with price decided later (0)
+    if (reqData.lotId) {
+      setLots((prev) =>
+        prev.map((lot) => {
+          if (lot.id === reqData.lotId) {
+            return {
+              ...lot,
+              isOutOfCategory: true,
+              isPendingCategoryApproval: true,
+              requestedCategoryName: reqData.categoryName,
+              ratePerKg: 0,
+              totalAmount: 0
+            };
+          }
+          return lot;
+        })
+      );
+    }
+
+    try {
+      const reqRef = doc(db, 'category_requests', newReqId);
+      await setDoc(reqRef, newRequest, { merge: true });
+
+      if (reqData.lotId) {
+        const lotRef = doc(db, 'lots', reqData.lotId);
+        await updateDoc(lotRef, {
+          isOutOfCategory: true,
+          isPendingCategoryApproval: true,
+          requestedCategoryName: reqData.categoryName,
+          ratePerKg: 0,
+          totalAmount: 0
+        });
+      }
+    } catch (err) {
+      console.warn('Firestore requestNewCategory error:', err);
+    }
+
+    playFeedbackChime('success');
+    return newRequest;
+  };
+
+  const approveCategoryRequest = async (
+    requestId: string,
+    approvedRatePerKg: number,
+    assignedStandardCategory: string,
+    reviewNotes: string = 'Approved by CPCB Environmental Officer. Live Mandi tariff instituted.',
+    reviewedBy: string = 'CPCB Senior Environmental Audit Officer'
+  ): Promise<void> => {
+    let targetReq: CategoryApprovalRequest | undefined;
+
+    setCategoryRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === requestId) {
+          targetReq = {
+            ...r,
+            status: 'approved',
+            approvedRatePerKg,
+            assignedStandardCategory,
+            reviewNotes,
+            reviewedBy
+          };
+          return targetReq;
+        }
+        return r;
+      })
+    );
+
+    // If request found, create a new Material item so it appears on the live Mandi board
+    if (targetReq) {
+      const newMaterialId = `mat_appr_${Date.now()}`;
+      const newMaterial: MaterialItem = {
+        id: newMaterialId,
+        name_en: targetReq.categoryName,
+        name_hi: targetReq.categoryName,
+        name_mr: targetReq.categoryName,
+        grade: `CPCB Approved (${assignedStandardCategory.toUpperCase()})`,
+        pricePerKg: approvedRatePerKg,
+        trend: 1.5,
+        category: assignedStandardCategory,
+        hazardLevel: 'safe',
+        audioText_en: `${targetReq.categoryName} approved by CPCB at ₹${approvedRatePerKg} per kg`,
+        audioText_hi: `${targetReq.categoryName} सीपीसीबी द्वारा ₹${approvedRatePerKg} प्रति किलो पर स्वीकृत`,
+        audioText_mr: `${targetReq.categoryName} CPCB द्वारे ₹${approvedRatePerKg} प्रति किलो मंजूर`,
+        crmYield: { copperPct: 12, lithiumPct: 1, cobaltPct: 0.5, neodymiumPct: 0.5, goldGramsPerTon: 50 }
+      };
+
+      await addCustomMaterial(newMaterial);
+
+      // Also update any pending lot linked to this request or with matching requestedCategoryName
+      setLots((prev) =>
+        prev.map((lot) => {
+          if (
+            (targetReq?.lotId && lot.id === targetReq.lotId) ||
+            lot.requestedCategoryName?.toLowerCase() === targetReq?.categoryName.toLowerCase() ||
+            lot.materialName.toLowerCase() === targetReq?.categoryName.toLowerCase()
+          ) {
+            const finalTotal = Math.round(lot.weightKg * approvedRatePerKg);
+            return {
+              ...lot,
+              materialId: newMaterialId,
+              materialName: targetReq.categoryName,
+              category: assignedStandardCategory,
+              ratePerKg: approvedRatePerKg,
+              totalAmount: finalTotal,
+              isPendingCategoryApproval: false,
+              isOutOfCategory: false
+            };
+          }
+          return lot;
+        })
+      );
+
+      try {
+        const reqRef = doc(db, 'category_requests', requestId);
+        await updateDoc(reqRef, {
+          status: 'approved',
+          approvedRatePerKg,
+          assignedStandardCategory,
+          reviewNotes,
+          reviewedBy
+        });
+
+        if (targetReq.lotId) {
+          const lotRef = doc(db, 'lots', targetReq.lotId);
+          await updateDoc(lotRef, {
+            ratePerKg: approvedRatePerKg,
+            category: assignedStandardCategory,
+            isPendingCategoryApproval: false,
+            isOutOfCategory: false
+          });
+        }
+      } catch (err) {
+        console.warn('Firestore approveCategoryRequest error:', err);
+      }
+    }
+
+    playFeedbackChime('success');
+  };
+
+  const rejectCategoryRequest = async (
+    requestId: string,
+    rejectionReason: string,
+    reviewedBy: string = 'CPCB Senior Environmental Audit Officer'
+  ): Promise<void> => {
+    let targetReq: CategoryApprovalRequest | undefined;
+
+    setCategoryRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === requestId) {
+          targetReq = {
+            ...r,
+            status: 'rejected',
+            rejectionReason,
+            reviewedBy
+          };
+          return targetReq;
+        }
+        return r;
+      })
+    );
+
+    if (targetReq?.lotId) {
+      setLots((prev) =>
+        prev.map((lot) => {
+          if (lot.id === targetReq?.lotId) {
+            return {
+              ...lot,
+              status: 'rejected',
+              anomalyFlag: true,
+              anomalyReason: `Category rejected by CPCB Authority: ${rejectionReason}`
+            };
+          }
+          return lot;
+        })
+      );
+    }
+
+    try {
+      const reqRef = doc(db, 'category_requests', requestId);
+      await updateDoc(reqRef, {
+        status: 'rejected',
+        rejectionReason,
+        reviewedBy
+      });
+
+      if (targetReq?.lotId) {
+        const lotRef = doc(db, 'lots', targetReq.lotId);
+        await updateDoc(lotRef, {
+          status: 'rejected',
+          anomalyFlag: true,
+          anomalyReason: `Category rejected by CPCB Authority: ${rejectionReason}`
+        });
+      }
+    } catch (err) {
+      console.warn('Firestore rejectCategoryRequest error:', err);
     }
 
     playFeedbackChime('warning');
@@ -607,12 +895,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recycler,
         materials,
         lots,
+        categoryRequests,
         activeCreatedLot,
         setActiveCreatedLot,
         addLot,
         approveAndPayLot,
         rejectLot,
         reopenLot,
+        requestNewCategory,
+        approveCategoryRequest,
+        rejectCategoryRequest,
         updateMaterialPrice,
         addCustomMaterial,
         syncPendingAiClassifications,

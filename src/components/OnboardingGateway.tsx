@@ -28,7 +28,12 @@ export const OnboardingGateway: React.FC = () => {
   const [collectorStep, setCollectorStep] = useState<'mobile' | 'otp' | 'selfie' | 'idcard'>('mobile');
   const [mobileNumber, setMobileNumber] = useState('9823456789');
   const [otpCode, setOtpCode] = useState('');
-  const [capturedPhotoUrl, setCapturedPhotoUrl] = useState(collector.selfieUrl);
+  const defaultMaleAvatar = 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=400&auto=format&fit=crop&q=80';
+  const [capturedPhotoUrl, setCapturedPhotoUrl] = useState(
+    !collector.selfieUrl || collector.selfieUrl.includes('1544717305') || collector.selfieUrl.includes('1544724569') || collector.selfieUrl.includes('1544716278')
+      ? defaultMaleAvatar
+      : collector.selfieUrl
+  );
 
   // Recycler login flow state
   const [cpcbId, setCpcbId] = useState('CPCB/EW-REC/2026/8812');
