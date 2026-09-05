@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { EWasteLot, MaterialItem } from '../types';
 import { playFeedbackChime } from '../utils/speech';
+import { parseDateTimeToMs } from '../utils/dateTime';
 import { TablePagination } from './TablePagination';
 import { 
   Factory, 
@@ -219,8 +220,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = pendingCategory === 'ALL' || lot.category.toLowerCase() === pendingCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (pendingSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (pendingSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (pendingSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (pendingSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       if (pendingSort === 'mass_desc') return b.weightKg - a.weightKg;
       if (pendingSort === 'mass_asc') return a.weightKg - b.weightKg;
       if (pendingSort === 'rate_desc') return b.ratePerKg - a.ratePerKg;
@@ -247,8 +248,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = paidCategory === 'ALL' || lot.category.toLowerCase() === paidCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (paidSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (paidSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (paidSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (paidSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (paidSort === 'mass_desc') return massB - massA;
@@ -351,8 +352,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = selectedVendorCategory === 'ALL' || lot.category.toLowerCase() === selectedVendorCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (selectedVendorSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (selectedVendorSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (selectedVendorSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (selectedVendorSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (selectedVendorSort === 'mass_desc') return massB - massA;
@@ -387,8 +388,8 @@ export const RecyclerErpDashboard: React.FC = () => {
         const scoreB = liveAnomalyResults[b.id]?.anomalyScore ?? (b.anomalyFlag ? 88 : 60);
         return scoreB - scoreA;
       }
-      if (anomalySort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (anomalySort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (anomalySort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (anomalySort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       if (anomalySort === 'mass_desc') return b.weightKg - a.weightKg;
       if (anomalySort === 'amount_desc') return b.totalAmount - a.totalAmount;
       return 0;
@@ -413,8 +414,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = rejectedCategory === 'ALL' || lot.category.toLowerCase() === rejectedCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (rejectedSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (rejectedSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (rejectedSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (rejectedSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       if (rejectedSort === 'mass_desc') return b.weightKg - a.weightKg;
       if (rejectedSort === 'amount_desc') return b.totalAmount - a.totalAmount;
       return 0;
@@ -437,7 +438,7 @@ export const RecyclerErpDashboard: React.FC = () => {
         lot.category.toLowerCase().includes(q) ||
         lot.materialName.toLowerCase().includes(q);
     }).sort((a, b) => {
-      if (eprSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      if (eprSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (eprSort === 'mass_desc') return massB - massA;

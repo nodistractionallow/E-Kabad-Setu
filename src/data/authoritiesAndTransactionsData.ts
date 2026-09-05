@@ -860,6 +860,131 @@ export const MATERIAL_PRICE_TRENDS_MAP: Record<string, MaterialPriceTrend> = {
     history30d: generatePriceSeries(65, 5, 2.3, 30),
     history90d: generatePriceSeries(65, 8, 4.5, 90),
     history1y: generatePriceSeries(65, 12, 8.2, 365)
+  },
+  mat_telecom_board: {
+    materialId: 'mat_telecom_board',
+    materialName: 'Telecom BTS Tower & Optical Line Terminal Boards',
+    materialName_hi: 'टेलीकॉम टॉवर व बेस स्टेशन बीटीएस कार्ड',
+    category: 'telecom',
+    currentRate: 650,
+    cpcbFloorRate: 610,
+    trend30dPct: 5.6,
+    high30d: 675,
+    low30d: 615,
+    volatilityIndex: 3.4,
+    forecastNextMonth: 'Very Bullish (+4.5% driven by 5G decommissioning silver & gold recovery)',
+    forecastChangePct: 4.5,
+    crmComposition: {
+      copperPct: 24.5,
+      lithiumPct: 0,
+      cobaltPct: 0,
+      neodymiumPct: 1.2,
+      goldGramsPerTon: 320
+    },
+    history7d: generatePriceSeries(650, 10, 2.0, 7),
+    history30d: generatePriceSeries(650, 20, 5.6, 30),
+    history90d: generatePriceSeries(650, 35, 9.8, 90),
+    history1y: generatePriceSeries(650, 55, 18.0, 365)
+  },
+  mat_solar_panels: {
+    materialId: 'mat_solar_panels',
+    materialName: 'Monocrystalline Solar PV Scrap Modules',
+    materialName_hi: 'सोलर फोटोवोल्टाइक पैनल व सिलिकॉन सेल',
+    category: 'solar',
+    currentRate: 240,
+    cpcbFloorRate: 215,
+    trend30dPct: 3.8,
+    high30d: 255,
+    low30d: 220,
+    volatilityIndex: 4.0,
+    forecastNextMonth: 'Rising (+3.2% silver busbar recovery from utility solar repowering)',
+    forecastChangePct: 3.2,
+    crmComposition: {
+      copperPct: 14.0,
+      lithiumPct: 0,
+      cobaltPct: 0,
+      neodymiumPct: 0,
+      goldGramsPerTon: 0
+    },
+    history7d: generatePriceSeries(240, 5, 1.2, 7),
+    history30d: generatePriceSeries(240, 12, 3.8, 30),
+    history90d: generatePriceSeries(240, 20, 7.5, 90),
+    history1y: generatePriceSeries(240, 32, 14.2, 365)
+  },
+  mat_cooling_compressors: {
+    materialId: 'mat_cooling_compressors',
+    materialName: 'De-gassed Refrigeration Rotary Compressors',
+    materialName_hi: 'रेफ्रिजरेटर व एसी रोटरी कंप्रेसर (तांबा)',
+    category: 'cooling',
+    currentRate: 160,
+    cpcbFloorRate: 145,
+    trend30dPct: 1.9,
+    high30d: 170,
+    low30d: 148,
+    volatilityIndex: 2.2,
+    forecastNextMonth: 'Stable (+1.5% heavy electrical steel and copper scrap)',
+    forecastChangePct: 1.5,
+    crmComposition: {
+      copperPct: 22.0,
+      lithiumPct: 0,
+      cobaltPct: 0,
+      neodymiumPct: 0,
+      goldGramsPerTon: 0
+    },
+    history7d: generatePriceSeries(160, 4, 0.5, 7),
+    history30d: generatePriceSeries(160, 8, 1.9, 30),
+    history90d: generatePriceSeries(160, 14, 4.0, 90),
+    history1y: generatePriceSeries(160, 22, 8.5, 365)
+  },
+  mat_medical_pcbs: {
+    materialId: 'mat_medical_pcbs',
+    materialName: 'Medical Ultrasound & Diagnostic Sensor Scrap',
+    materialName_hi: 'चिकित्सा इमेजिंग व डायग्नोस्टिक पीसीबी',
+    category: 'medical',
+    currentRate: 410,
+    cpcbFloorRate: 380,
+    trend30dPct: 4.1,
+    high30d: 430,
+    low30d: 385,
+    volatilityIndex: 3.0,
+    forecastNextMonth: 'Bullish (+3.8% high-purity palladium and platinum contacts)',
+    forecastChangePct: 3.8,
+    crmComposition: {
+      copperPct: 19.5,
+      lithiumPct: 0,
+      cobaltPct: 0,
+      neodymiumPct: 0.8,
+      goldGramsPerTon: 180
+    },
+    history7d: generatePriceSeries(410, 8, 1.5, 7),
+    history30d: generatePriceSeries(410, 15, 4.1, 30),
+    history90d: generatePriceSeries(410, 25, 7.8, 90),
+    history1y: generatePriceSeries(410, 40, 15.0, 365)
+  },
+  mat_led_lighting: {
+    materialId: 'mat_led_lighting',
+    materialName: 'LED Drivers, Luminaires & Aluminium Heat Sinks',
+    materialName_hi: 'एलईडी ड्राइवर्स व एल्युमिनियम लाइट फ्रेम',
+    category: 'lighting',
+    currentRate: 35,
+    cpcbFloorRate: 30,
+    trend30dPct: 0.5,
+    high30d: 38,
+    low30d: 31,
+    volatilityIndex: 2.0,
+    forecastNextMonth: 'Flat / Subsidized EPR collection',
+    forecastChangePct: 0.5,
+    crmComposition: {
+      copperPct: 6.0,
+      lithiumPct: 0,
+      cobaltPct: 0,
+      neodymiumPct: 0,
+      goldGramsPerTon: 0
+    },
+    history7d: generatePriceSeries(35, 1, 0.2, 7),
+    history30d: generatePriceSeries(35, 2, 0.5, 30),
+    history90d: generatePriceSeries(35, 3, 1.5, 90),
+    history1y: generatePriceSeries(35, 5, 3.2, 365)
   }
 };
 
@@ -891,6 +1016,21 @@ export function getMaterialPriceTrend(materialIdOrName: string, fallbackRate: nu
   }
   if (lower.includes('plastic') || lower.includes('casing') || lower.includes('polymer') || lower.includes('abs')) {
     return MATERIAL_PRICE_TRENDS_MAP.mat_flame_plastics;
+  }
+  if (lower.includes('telecom') || lower.includes('bts') || lower.includes('tower') || lower.includes('optical')) {
+    return MATERIAL_PRICE_TRENDS_MAP.mat_telecom_board;
+  }
+  if (lower.includes('solar') || lower.includes('pv') || lower.includes('photovoltaic') || lower.includes('panel')) {
+    return MATERIAL_PRICE_TRENDS_MAP.mat_solar_panels;
+  }
+  if (lower.includes('cooling') || lower.includes('compressor') || lower.includes('refrigerat') || lower.includes('ac')) {
+    return MATERIAL_PRICE_TRENDS_MAP.mat_cooling_compressors;
+  }
+  if (lower.includes('medical') || lower.includes('sensor') || lower.includes('ultrasound') || lower.includes('diagnostic')) {
+    return MATERIAL_PRICE_TRENDS_MAP.mat_medical_pcbs;
+  }
+  if (lower.includes('led') || lower.includes('light') || lower.includes('luminaire') || lower.includes('driver')) {
+    return MATERIAL_PRICE_TRENDS_MAP.mat_led_lighting;
   }
 
   // Generate dynamic trend for custom unlisted lots

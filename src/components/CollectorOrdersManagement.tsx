@@ -2,8 +2,10 @@ import React, { useState, useMemo } from 'react';
 import { EWasteLot, CollectorProfile } from '../types';
 import { TablePagination } from './TablePagination';
 import { DigitalStampOverlay } from './DigitalStampOverlay';
+import { LotPriceHistoryModal } from './LotPriceHistoryModal';
 import { QRCodeSVG } from 'qrcode.react';
 import { playFeedbackChime } from '../utils/speech';
+import { parseDateTimeToMs } from '../utils/dateTime';
 import { 
   Package, 
   Clock, 
@@ -25,7 +27,8 @@ import {
   Printer,
   ChevronRight,
   ShieldCheck,
-  Tag
+  Tag,
+  TrendingUp
 } from 'lucide-react';
 
 interface CollectorOrdersManagementProps {
@@ -101,8 +104,12 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
         return matchesCategory && matchesSearch;
       })
       .sort((a, b) => {
-        if (sortBy === 'date_desc') return b.id.localeCompare(a.id);
-        if (sortBy === 'date_asc') return a.id.localeCompare(b.id);
+        if (sortBy === 'date_desc') {
+          return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+        }
+        if (sortBy === 'date_asc') {
+          return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
+        }
         if (sortBy === 'mass_desc') return (b.weighbridgeWeightKg || b.weightKg) - (a.weighbridgeWeightKg || a.weightKg);
         if (sortBy === 'amount_desc') return (b.finalPayoutAmount || b.totalAmount) - (a.finalPayoutAmount || a.totalAmount);
         return 0;

@@ -1,6 +1,6 @@
 export type Language = 'hi' | 'mr' | 'en';
 
-export type UserRole = 'gateway' | 'collector' | 'recycler' | 'government';
+export type UserRole = 'gateway' | 'collector' | 'recycler' | 'government' | 'order_tracking';
 
 export interface MaterialItem {
   id: string;
@@ -97,6 +97,9 @@ export interface EWasteLot {
   weighbridgeWeightKg?: number;
   finalPayoutAmount?: number;
   eprCreditKg?: number;
+  createdAt?: string;
+  anomalyCleared?: boolean;
+  anomalyResolution?: 'SUPERVISOR_OVERRIDE' | 'REJECTED' | 'CLEARED';
 }
 
 export interface CollectorProfile {
@@ -220,3 +223,57 @@ export interface MaterialPriceTrend {
   history90d: LotPricePoint[];
   history1y: LotPricePoint[];
 }
+
+export interface HelpDeskMessage {
+  id: string;
+  senderRole: 'collector' | 'recycler' | 'government' | 'bot' | 'agent';
+  senderName: string;
+  text: string;
+  timestamp: string;
+}
+
+export interface HelpDeskTicket {
+  id: string;
+  title: string;
+  category: 'rates' | 'settlement' | 'compliance' | 'weighbridge' | 'hazardous' | 'other';
+  portalType: 'collector' | 'recycler' | 'government';
+  userName: string;
+  userPhone?: string;
+  userId: string;
+  status: 'open' | 'agent_assigned' | 'resolved';
+  assignedAgentName?: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: HelpDeskMessage[];
+}
+
+export interface PartnerRegistration {
+  id: string;
+  name: string;
+  phone: string;
+  city: string;
+  state: string;
+  ward: string;
+  bankUpi: string;
+  tier: 'Standard Partner' | 'Silver Partner' | 'Gold Partner';
+  aadhaarOrGst?: string;
+  facilityName?: string;
+  appliedDate: string;
+  status: 'PENDING_GOVT_APPROVAL' | 'APPROVED' | 'REJECTED';
+  approvedBy?: string;
+  approvedDate?: string;
+  rejectionReason?: string;
+  assignedCpcbPartnerId?: string;
+  registeredByAuthorityId: string;
+  companyName?: string;
+  spcbLicenseNo?: string;
+  statePcb?: string;
+  facilityAddress?: string;
+  applicantName?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  partnerType?: 'RECYCLER_FACILITY' | 'AGGREGATOR_HUB';
+  annualCapacityMetricTons?: number;
+  categoriesHandled?: string[];
+}
+

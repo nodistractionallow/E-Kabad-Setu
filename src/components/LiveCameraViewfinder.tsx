@@ -10,7 +10,7 @@ interface LiveCameraViewfinderProps {
   language?: 'hi' | 'mr' | 'en';
 }
 
-function detectHumanSkinRatio(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+export function detectHumanSkinRatio(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
   try {
     const startX = Math.floor(width * 0.2);
     const startY = Math.floor(height * 0.1);
@@ -46,7 +46,7 @@ function detectHumanSkinRatio(ctx: CanvasRenderingContext2D, width: number, heig
   }
 }
 
-function detectDarkOrSolidColor(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+export function detectDarkOrSolidColor(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
   try {
     const sampleW = Math.min(width, 400);
     const sampleH = Math.min(height, 300);
@@ -82,7 +82,7 @@ function detectDarkOrSolidColor(ctx: CanvasRenderingContext2D, width: number, he
     }
     const stdDev = Math.sqrt(varianceSum / (count || 1));
 
-    // If std deviation is under 6 (almost entirely flat single color tone) or dark flat under 30
+    // If std deviation is under 6.5 (almost entirely flat single color tone) or dark flat under 32
     if (stdDev < 6.5 || (avgLum < 32 && stdDev < 10)) {
       return true;
     }
@@ -91,6 +91,44 @@ function detectDarkOrSolidColor(ctx: CanvasRenderingContext2D, width: number, he
   } catch {
     return false;
   }
+}
+
+/**
+ * Utility to analyze any image (Data URL or external URL) for pitch darkness or human face
+ */
+export function analyzeImageForSafety(imageSrc: string): Promise<{ isHuman: boolean; isBlackOrBlank: boolean }> {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const w = Math.min(img.naturalWidth || 320, 320);
+          const h = Math.min(img.naturalHeight || 240, 240);
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve({ isHuman: false, isBlackOrBlank: false });
+            return;
+          }
+          ctx.drawImage(img, 0, 0, w, h);
+          const isHuman = detectHumanSkinRatio(ctx, w, h);
+          const isBlackOrBlank = detectDarkOrSolidColor(ctx, w, h);
+          resolve({ isHuman, isBlackOrBlank });
+        } catch {
+          resolve({ isHuman: false, isBlackOrBlank: false });
+        }
+      };
+      img.onerror = () => {
+        resolve({ isHuman: false, isBlackOrBlank: false });
+      };
+      img.src = imageSrc;
+    } catch {
+      resolve({ isHuman: false, isBlackOrBlank: false });
+    }
+  });
 }
 
 export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({

@@ -14,15 +14,18 @@ import {
   FileText,
   Recycle,
   Lock,
-  ArrowLeft
+  ArrowLeft,
+  Building2
 } from 'lucide-react';
 import { playFeedbackChime } from '../utils/speech';
+import { PartnerRegistrationModal } from './PartnerRegistrationModal';
 
 export const OnboardingGateway: React.FC = () => {
   const { language, setLanguage, setCurrentView, collector, setCollector, speak } = useApp();
 
   // Active portal mode: 'collector' (default) or 'recycler'
   const [activePortal, setActivePortal] = useState<'collector' | 'recycler'>('collector');
+  const [showPartnerModal, setShowPartnerModal] = useState(false);
 
   // Collector login flow state
   const [collectorStep, setCollectorStep] = useState<'mobile' | 'otp' | 'selfie' | 'idcard'>('mobile');
@@ -645,21 +648,6 @@ export const OnboardingGateway: React.FC = () => {
 
               </div>
 
-              {/* Bottom Navigation Hint: Jump to Recycler */}
-              <div className="mt-5 text-center border-t border-slate-100 pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    playFeedbackChime('beep');
-                    setActivePortal('recycler');
-                  }}
-                  className="text-xs text-slate-500 hover:text-emerald-700 font-medium transition-colors inline-flex items-center gap-1.5"
-                >
-                  <Factory className="w-3.5 h-3.5 text-slate-400" />
-                  <span>{t.switchToRecycler}</span>
-                </button>
-              </div>
-
             </div>
           )}
 
@@ -668,38 +656,38 @@ export const OnboardingGateway: React.FC = () => {
               Shown ONLY when activePortal === 'recycler'
           ========================================================================== */}
           {activePortal === 'recycler' && (
-            <div className="relative bg-slate-800 rounded-3xl p-6 sm:p-8 border-2 border-slate-700 hover:border-emerald-400 transition-all shadow-xl group text-white animate-fadeIn">
+            <div className="relative bg-white border-2 border-slate-200 hover:border-emerald-500 rounded-3xl p-6 sm:p-8 shadow-xl backdrop-blur transition-all animate-fadeIn">
               
               {/* Card Header Badge */}
-              <div className="absolute -top-3.5 left-6 bg-emerald-500 text-slate-950 text-xs font-bold uppercase tracking-wider px-3.5 py-0.5 rounded-full flex items-center gap-1.5 shadow-sm">
+              <div className="absolute -top-3.5 left-6 bg-emerald-600 text-white text-xs font-bold uppercase tracking-wider px-3.5 py-0.5 rounded-full flex items-center gap-1.5 shadow-sm">
                 <Factory className="w-3.5 h-3.5" />
                 <span>{t.recyclerPortalBadge}</span>
               </div>
 
-              {/* Return to Collector button inside card */}
-              <div className="flex items-center justify-between mb-4">
+              {/* Card Header */}
+              <div className="flex items-start justify-between mb-4">
                 <div>
-                  <h3 className="text-xl sm:text-2xl font-bold text-white flex items-center gap-2">
+                  <h3 className="text-xl sm:text-2xl font-bold text-slate-900 flex items-center gap-2">
                     {t.card2Title}
                   </h3>
-                  <p className="text-xs font-semibold text-emerald-400 mt-0.5">{t.card2Role}</p>
+                  <p className="text-xs font-semibold text-emerald-700 mt-0.5">{t.card2Role}</p>
                 </div>
-                <div className="w-12 h-12 rounded-2xl bg-slate-700 flex items-center justify-center text-emerald-400 shrink-0">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 shrink-0">
                   <Factory className="w-6 h-6" />
                 </div>
               </div>
 
-              <p className="text-xs sm:text-sm text-slate-300 mb-6 leading-relaxed">
+              <p className="text-xs sm:text-sm text-slate-600 mb-6 leading-relaxed">
                 {t.card2Subtext}
               </p>
 
-              <form onSubmit={handleRecyclerLogin} className="bg-slate-900/90 border border-slate-700/80 rounded-2xl p-5">
+              <form onSubmit={handleRecyclerLogin} className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
                 <div className="mb-4">
-                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wide mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">
                     {t.recyclerIdLabel}
                   </label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                       <FileText className="w-4 h-4" />
                     </div>
                     <input
@@ -707,20 +695,20 @@ export const OnboardingGateway: React.FC = () => {
                       value={cpcbId}
                       onChange={(e) => setCpcbId(e.target.value)}
                       placeholder="CPCB/EW-REC/2026/8812"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-3 py-2.5 text-sm font-mono text-cyan-300 focus:outline-none focus:border-emerald-400"
+                      className="w-full bg-white border border-slate-300 rounded-xl pl-10 pr-3 py-2.5 text-sm font-mono text-slate-900 font-semibold focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 shadow-xs"
                     />
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-1">
+                  <p className="text-[11px] text-slate-500 mt-1">
                     {t.facilitySubtext}
                   </p>
                 </div>
 
                 <div className="mb-5">
-                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wide mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1.5">
                     {t.passwordLabel}
                   </label>
                   <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                       <Lock className="w-4 h-4" />
                     </div>
                     <input
@@ -728,55 +716,40 @@ export const OnboardingGateway: React.FC = () => {
                       value={recyclerPassword}
                       onChange={(e) => setRecyclerPassword(e.target.value)}
                       placeholder="••••••••••••"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-3 py-2.5 text-sm font-mono text-white focus:outline-none focus:border-emerald-400"
+                      className="w-full bg-white border border-slate-300 rounded-xl pl-10 pr-3 py-2.5 text-sm font-mono text-slate-900 font-semibold focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600 shadow-xs"
                     />
                   </div>
                 </div>
 
                 {recyclerError && (
-                  <div className="mb-4 p-2.5 bg-rose-950/50 border border-rose-500/40 rounded-xl text-xs text-rose-300">
+                  <div className="mb-4 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
                     {recyclerError}
                   </div>
                 )}
 
-                <div className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 text-xs text-slate-400 space-y-1.5 mb-5 font-mono">
+                <div className="p-3 bg-white rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1.5 mb-5 font-mono shadow-xs">
                   <div className="flex justify-between">
                     <span>{t.quotaLabel}</span>
-                    <span className="text-emerald-400 font-bold">120.0 MT / Month</span>
+                    <span className="text-emerald-700 font-bold">120.0 MT / Month</span>
                   </div>
                   <div className="flex justify-between">
                     <span>{t.spcbLabel}</span>
-                    <span className="text-slate-300">MPCB-PUNE-EW-902</span>
+                    <span className="text-slate-800 font-semibold">MPCB-PUNE-EW-902</span>
                   </div>
                   <div className="flex justify-between">
                     <span>{t.calibrationLabel}</span>
-                    <span className="text-emerald-400">{t.class3Verified}</span>
+                    <span className="text-emerald-700 font-bold">{t.class3Verified}</span>
                   </div>
                 </div>
 
                 <button
                   type="submit"
-                  className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition-transform active:scale-[0.99]"
+                  className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-md shadow-emerald-700/20 transition-transform active:scale-[0.99]"
                 >
                   <span>{t.loginRecyclerBtn}</span>
                   <ArrowRight className="w-5 h-5" />
                 </button>
               </form>
-
-              {/* Bottom Navigation Hint: Back to Kabadiwala Saathi */}
-              <div className="mt-5 text-center border-t border-slate-700/80 pt-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    playFeedbackChime('beep');
-                    setActivePortal('collector');
-                  }}
-                  className="text-xs text-slate-400 hover:text-emerald-300 font-medium transition-colors inline-flex items-center gap-1.5"
-                >
-                  <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>{t.backToCollector}</span>
-                </button>
-              </div>
 
             </div>
           )}

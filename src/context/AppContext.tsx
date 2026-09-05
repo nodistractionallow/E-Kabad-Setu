@@ -5,12 +5,14 @@ import {
   onSnapshot,
   setDoc,
   updateDoc,
+  deleteDoc,
   writeBatch
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility, CategoryApprovalRequest } from '../types';
-import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, MOCK_RECYCLER, INITIAL_CATEGORY_REQUESTS } from '../data/mockData';
+import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility, CategoryApprovalRequest, PartnerRegistration } from '../types';
+import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, MOCK_RECYCLER, INITIAL_CATEGORY_REQUESTS, INITIAL_PARTNER_REGISTRATIONS } from '../data/mockData';
 import { speakVoice, playFeedbackChime, stopVoice } from '../utils/speech';
+import { parseDateTimeToMs } from '../utils/dateTime';
 
 interface AppContextType {
   currentView: UserRole;
@@ -25,12 +27,21 @@ interface AppContextType {
   materials: MaterialItem[];
   lots: EWasteLot[];
   categoryRequests: CategoryApprovalRequest[];
+  partnerRegistrations: PartnerRegistration[];
   activeCreatedLot: EWasteLot | null;
   setActiveCreatedLot: (lot: EWasteLot | null) => void;
+  activePublicOrderId: string | null;
+  setActivePublicOrderId: (orderId: string | null) => void;
   addLot: (lot: Omit<EWasteLot, 'id' | 'timestamp' | 'status'>) => Promise<EWasteLot>;
   approveAndPayLot: (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH') => Promise<void>;
   rejectLot: (lotId: string, reason: string) => Promise<void>;
+  overrideAnomalyLot: (lotId: string) => Promise<void>;
+  rejectAnomalyLot: (lotId: string, reason: string) => Promise<void>;
+  deleteLotWithKey: (lotId: string, adminKey: string) => Promise<boolean>;
   reopenLot?: (lotId: string) => Promise<void>;
+  registerPartner: (partner: Omit<PartnerRegistration, 'id' | 'appliedDate' | 'status'>) => Promise<PartnerRegistration>;
+  approvePartner: (registrationId: string, officerName: string) => Promise<void>;
+  rejectPartner: (registrationId: string, reason: string) => Promise<void>;
   requestNewCategory: (req: Omit<CategoryApprovalRequest, 'id' | 'timestamp' | 'status'>) => Promise<CategoryApprovalRequest>;
   approveCategoryRequest: (requestId: string, approvedRatePerKg: number, assignedStandardCategory: string, reviewNotes?: string, reviewedBy?: string) => Promise<void>;
   rejectCategoryRequest: (requestId: string, rejectionReason: string, reviewedBy?: string) => Promise<void>;
@@ -69,9 +80,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [language, setLanguageState] = useState<Language>(() => {
     try {
-      return (localStorage.getItem(STORAGE_KEYS.LANG) as Language) || 'hi';
+      return (localStorage.getItem(STORAGE_KEYS.LANG) as Language) || 'en';
     } catch {
-      return 'hi';
+      return 'en';
     }
   });
 
@@ -130,6 +141,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [recycler] = useState<RecyclerFacility>(MOCK_RECYCLER);
   const [activeCreatedLot, setActiveCreatedLot] = useState<EWasteLot | null>(null);
+  const [activePublicOrderId, setActivePublicOrderId] = useState<string | null>(null);
+  const [partnerRegistrations, setPartnerRegistrations] = useState<PartnerRegistration[]>(() => {
+    try {
+      const stored = localStorage.getItem('ekabad_partner_regs_v1');
+      return stored ? JSON.parse(stored) : INITIAL_PARTNER_REGISTRATIONS;
+    } catch {
+      return INITIAL_PARTNER_REGISTRATIONS;
+    }
+  });
   const [isFirebaseSyncing, setIsFirebaseSyncing] = useState<boolean>(false);
   const [isSyncingOfflineQueue, setIsSyncingOfflineQueue] = useState<boolean>(false);
   const hasInitializedFirebase = useRef(false);
@@ -228,8 +248,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           });
 
-          // Sort by creation or natural descending order
-          loadedLots.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+          // Sort by creation descending (newest first)
+          loadedLots.sort((a, b) => parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp));
           setLots(loadedLots);
           setIsFirebaseSyncing(false);
         } else if (!hasInitializedFirebase.current) {
@@ -290,7 +310,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               id: docSnap.id
             });
           });
-          loadedReqs.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+          loadedReqs.sort((a, b) => parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp));
           setCategoryRequests(loadedReqs);
         } else {
           // Seed initial category requests to Firestore
@@ -723,6 +743,208 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     playFeedbackChime('beep');
   };
 
+  const overrideAnomalyLot = async (lotId: string): Promise<void> => {
+    setLots((prev) =>
+      prev.map((lot) => {
+        if (lot.id === lotId) {
+          const verifiedMass = lot.weighbridgeWeightKg || lot.weightKg;
+          return {
+            ...lot,
+            anomalyCleared: true,
+            anomalyFlag: false,
+            anomalyResolution: 'SUPERVISOR_OVERRIDE',
+            status: 'paid',
+            weighbridgeWeightKg: verifiedMass,
+            finalPayoutAmount: verifiedMass * lot.ratePerKg,
+            settlementUtr: lot.settlementUtr || `UPI-OVERRIDE-${Date.now().toString().slice(-6)}`
+          };
+        }
+        return lot;
+      })
+    );
+
+    try {
+      const lotRef = doc(db, 'lots', lotId);
+      await updateDoc(lotRef, {
+        anomalyCleared: true,
+        anomalyFlag: false,
+        anomalyResolution: 'SUPERVISOR_OVERRIDE',
+        status: 'paid',
+        settlementUtr: `UPI-OVERRIDE-${Date.now().toString().slice(-6)}`
+      });
+    } catch (err) {
+      console.warn('Firestore overrideAnomalyLot error:', err);
+    }
+    playFeedbackChime('success');
+  };
+
+  const rejectAnomalyLot = async (lotId: string, reason: string): Promise<void> => {
+    setLots((prev) =>
+      prev.map((lot) => {
+        if (lot.id === lotId) {
+          return {
+            ...lot,
+            status: 'rejected',
+            anomalyFlag: true,
+            anomalyCleared: false,
+            anomalyReason: reason,
+            anomalyResolution: 'REJECTED_QUARANTINED'
+          };
+        }
+        return lot;
+      })
+    );
+
+    try {
+      const lotRef = doc(db, 'lots', lotId);
+      await updateDoc(lotRef, {
+        status: 'rejected',
+        anomalyFlag: true,
+        anomalyCleared: false,
+        anomalyReason: reason,
+        anomalyResolution: 'REJECTED_QUARANTINED'
+      });
+    } catch (err) {
+      console.warn('Firestore rejectAnomalyLot error:', err);
+    }
+    playFeedbackChime('warning');
+  };
+
+  const deleteLotWithKey = async (lotId: string, adminKey: string): Promise<boolean> => {
+    if (adminKey.trim() !== '12345678') {
+      return false;
+    }
+
+    setLots((prev) => prev.filter((l) => l.id !== lotId));
+
+    try {
+      const lotRef = doc(db, 'lots', lotId);
+      await deleteDoc(lotRef);
+    } catch (err) {
+      console.warn('Firestore deleteLotWithKey error:', err);
+    }
+
+    playFeedbackChime('beep');
+    return true;
+  };
+
+  const registerPartner = async (partnerData: Omit<PartnerRegistration, 'id' | 'appliedDate' | 'status'>): Promise<PartnerRegistration> => {
+    const regId = `REG-PARTNER-2026-${Math.floor(100 + Math.random() * 900)}`;
+    const nowStr = new Date().toLocaleString('en-IN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    const newReg: PartnerRegistration = {
+      ...partnerData,
+      id: regId,
+      status: 'PENDING_GOVT_APPROVAL',
+      appliedDate: nowStr
+    };
+
+    setPartnerRegistrations((prev) => {
+      const updated = [newReg, ...prev];
+      try {
+        localStorage.setItem('ekabad_partner_regs_v1', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage error:', e);
+      }
+      return updated;
+    });
+
+    try {
+      const regRef = doc(db, 'partner_registrations', regId);
+      await setDoc(regRef, newReg);
+    } catch (err) {
+      console.warn('Firestore partner registration notice:', err);
+    }
+
+    playFeedbackChime('success');
+    return newReg;
+  };
+
+  const approvePartner = async (registrationId: string, officerName: string): Promise<void> => {
+    const cpcbId = `CPCB-SAF-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const nowStr = new Date().toLocaleString('en-IN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    setPartnerRegistrations((prev) => {
+      const updated = prev.map((r) => {
+        if (r.id === registrationId) {
+          return {
+            ...r,
+            status: 'APPROVED' as const,
+            approvedDate: nowStr,
+            approvedBy: officerName,
+            assignedCpcbPartnerId: cpcbId
+          };
+        }
+        return r;
+      });
+      try {
+        localStorage.setItem('ekabad_partner_regs_v1', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage error:', e);
+      }
+      return updated;
+    });
+
+    try {
+      const regRef = doc(db, 'partner_registrations', registrationId);
+      await updateDoc(regRef, {
+        status: 'APPROVED',
+        approvedDate: nowStr,
+        approvedBy: officerName,
+        assignedCpcbPartnerId: cpcbId
+      });
+    } catch (err) {
+      console.warn('Firestore approvePartner error:', err);
+    }
+    playFeedbackChime('success');
+  };
+
+  const rejectPartner = async (registrationId: string, reason: string): Promise<void> => {
+    setPartnerRegistrations((prev) => {
+      const updated = prev.map((r) => {
+        if (r.id === registrationId) {
+          return {
+            ...r,
+            status: 'REJECTED' as const,
+            rejectionReason: reason
+          };
+        }
+        return r;
+      });
+      try {
+        localStorage.setItem('ekabad_partner_regs_v1', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage error:', e);
+      }
+      return updated;
+    });
+
+    try {
+      const regRef = doc(db, 'partner_registrations', registrationId);
+      await updateDoc(regRef, {
+        status: 'REJECTED',
+        rejectionReason: reason
+      });
+    } catch (err) {
+      console.warn('Firestore rejectPartner error:', err);
+    }
+    playFeedbackChime('warning');
+  };
+
   const syncPendingAiClassifications = async (): Promise<void> => {
     if (isSyncingRef.current || !isOnline) return;
 
@@ -896,12 +1118,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         materials,
         lots,
         categoryRequests,
+        partnerRegistrations,
         activeCreatedLot,
         setActiveCreatedLot,
+        activePublicOrderId,
+        setActivePublicOrderId,
         addLot,
         approveAndPayLot,
         rejectLot,
+        overrideAnomalyLot,
+        rejectAnomalyLot,
+        deleteLotWithKey,
         reopenLot,
+        registerPartner,
+        approvePartner,
+        rejectPartner,
         requestNewCategory,
         approveCategoryRequest,
         rejectCategoryRequest,

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   X,
   TrendingUp,
@@ -10,11 +10,12 @@ import {
   Layers,
   Calendar,
   Sparkles,
-  Building2,
   User,
   Scale,
   CheckCircle2,
-  Info
+  Info,
+  Maximize2,
+  ChevronDown
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -29,7 +30,10 @@ import {
   ReferenceLine
 } from 'recharts';
 import { LotPricePoint } from '../types';
-import { getMaterialPriceTrend, NATIONAL_TRANSACTIONS_LOG } from '../data/authoritiesAndTransactionsData';
+import {
+  getMaterialPriceTrend,
+  MATERIAL_PRICE_TRENDS_MAP
+} from '../data/authoritiesAndTransactionsData';
 
 interface LotPriceHistoryModalProps {
   isOpen: boolean;
@@ -38,6 +42,7 @@ interface LotPriceHistoryModalProps {
   materialId?: string;
   currentRate?: number;
   lotId?: string;
+  isEmbedded?: boolean;
 }
 
 export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
@@ -46,15 +51,29 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
   lotName,
   materialId,
   currentRate,
-  lotId
+  lotId,
+  isEmbedded = false
 }) => {
+  const [selectedMaterialId, setSelectedMaterialId] = useState<string>(materialId || lotName);
   const [timeline, setTimeline] = useState<'7d' | '30d' | '90d' | '1y'>('30d');
-  const [activeMetric, setActiveMetric] = useState<'all' | 'spot' | 'cpcb' | 'lme'>('all');
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Sync when prop changes
+  useEffect(() => {
+    setSelectedMaterialId(materialId || lotName);
+  }, [materialId, lotName]);
+
+  // Ensure scroll is fixed at top upon opening so graph is directly visible
+  useEffect(() => {
+    if (isOpen && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
+  }, [isOpen]);
 
   // Lookup the comprehensive price trends
   const trendData = useMemo(() => {
-    return getMaterialPriceTrend(materialId || lotName, currentRate);
-  }, [materialId, lotName, currentRate]);
+    return getMaterialPriceTrend(selectedMaterialId, currentRate);
+  }, [selectedMaterialId, currentRate]);
 
   // Select the historical series according to timeline
   const chartSeries = useMemo(() => {
@@ -72,149 +91,155 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
     }
   }, [timeline, trendData]);
 
-  // Find recent transactions related to this material or category
-  const relatedTransactions = useMemo(() => {
-    const term = (materialId || lotName).toLowerCase();
-    return NATIONAL_TRANSACTIONS_LOG.filter(
-      (tx) =>
-        tx.materialName.toLowerCase().includes(term) ||
-        tx.materialId.toLowerCase() === term ||
-        tx.category.toLowerCase() === trendData.category.toLowerCase()
-    ).slice(0, 5);
-  }, [materialId, lotName, trendData.category]);
+  const isPositiveTrend = trendData.trend30dPct >= 0;
 
   if (!isOpen) return null;
 
-  const isPositiveTrend = trendData.trend30dPct >= 0;
+  // Available standard materials for quick-switching in header
+  const quickSwitchOptions = [
+    { id: 'mat_pcb_high', label: 'Motherboard PCB', rate: 495 },
+    { id: 'mat_copper_wire', label: 'Copper Wire', rate: 720 },
+    { id: 'mat_li_battery', label: 'Li-ion Battery', rate: 310 },
+    { id: 'mat_neodymium_hdds', label: 'Rare-Earth Magnet', rate: 540 },
+    { id: 'mat_telecom_board', label: 'Telecom BTS Board', rate: 650 },
+    { id: 'mat_solar_panels', label: 'Solar PV Module', rate: 240 },
+    { id: 'mat_cooling_compressors', label: 'Cooling Compressor', rate: 160 },
+    { id: 'mat_medical_pcbs', label: 'Medical PCB', rate: 410 },
+    { id: 'mat_flame_plastics', label: 'E-Plastics FR', rate: 65 }
+  ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto animate-fadeIn">
-      <div 
-        className="bg-slate-900 border border-slate-700/80 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden"
+    <div
+      id="lot-price-graph-container"
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs p-2 sm:p-4 md:p-6 flex items-start justify-center animate-fadeIn"
+      onClick={onClose}
+    >
+      <div
+        ref={scrollContainerRef}
+        className="bg-white border border-slate-200 rounded-3xl w-full max-w-5xl shadow-2xl overflow-hidden my-2 sm:my-4 flex flex-col text-slate-900 max-h-[94vh]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="p-5 sm:p-6 border-b border-slate-800 bg-slate-950/60 flex items-start justify-between">
+        {/* TOP BAR: Title & Direct Controls */}
+        <div className="p-4 sm:p-5 border-b border-slate-200 bg-slate-50/80 flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
-              <TrendingUp className="w-6 h-6 text-emerald-400" />
+            <div className="w-11 h-11 rounded-2xl bg-emerald-100 border border-emerald-200 flex items-center justify-center shrink-0 text-emerald-700">
+              <TrendingUp className="w-5 h-5" />
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2 mb-1">
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold uppercase tracking-wider">
-                  CPCB Real-Time Mandi Index
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-mono font-bold uppercase tracking-wider">
+                  CPCB Live Mandi Index
                 </span>
                 {lotId && (
-                  <span className="px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 text-[10px] font-mono">
+                  <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-mono">
                     Lot: {lotId}
                   </span>
                 )}
-                <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono">
-                  {trendData.category.toUpperCase()} Schedule
+                <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-mono font-semibold">
+                  Schedule {trendData.category.toUpperCase()}
+                </span>
+                <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">
+                  • Direct Fixed View (No Scrolling Required)
                 </span>
               </div>
-              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+              <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 tracking-tight">
                 {trendData.materialName}
               </h2>
               {trendData.materialName_hi && (
-                <p className="text-xs text-slate-400 mt-0.5 font-medium">
-                  {trendData.materialName_hi} • Daily Mandi Spot & Historical Valuation
+                <p className="text-xs text-slate-500 font-medium mt-0.5">
+                  {trendData.materialName_hi}
                 </p>
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-            aria-label="Close modal"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 rounded-xl text-slate-400 hover:text-slate-800 hover:bg-slate-200 transition-colors cursor-pointer"
+              aria-label="Close modal"
+              title="Close graph"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        {/* Scrollable Content Body */}
-        <div className="p-5 sm:p-6 overflow-y-auto space-y-6 custom-scrollbar">
-          {/* Top Key Metrics Banner */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {/* Current Spot Rate */}
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-3.5 relative overflow-hidden">
-              <div className="text-[11px] font-mono text-slate-400 font-semibold uppercase">Current Spot Mandi Rate</div>
-              <div className="flex items-baseline gap-2 mt-1">
-                <span className="text-2xl sm:text-3xl font-black font-mono text-emerald-400">
-                  ₹{trendData.currentRate}
-                </span>
-                <span className="text-xs font-mono text-slate-400">/ kg</span>
-              </div>
-              <div className="flex items-center gap-1 mt-1 text-[11px] font-bold font-mono">
-                {isPositiveTrend ? (
-                  <span className="text-emerald-400 flex items-center gap-0.5">
-                    <TrendingUp className="w-3 h-3" /> +{trendData.trend30dPct}%
+        {/* MATERIAL QUICK SWITCH BAR: Direct selection without closing */}
+        <div className="bg-slate-100/70 border-b border-slate-200 px-4 py-2 flex items-center gap-2 overflow-x-auto">
+          <span className="text-[11px] font-mono font-bold uppercase text-slate-500 shrink-0 flex items-center gap-1">
+            <Layers className="w-3.5 h-3.5 text-slate-600" />
+            Select Scrap Grade:
+          </span>
+          <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
+            {quickSwitchOptions.map((opt) => {
+              const isSelected = selectedMaterialId === opt.id || selectedMaterialId.toLowerCase().includes(opt.label.toLowerCase().slice(0, 5));
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setSelectedMaterialId(opt.id)}
+                  className={`px-3 py-1 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-emerald-600 text-white shadow-xs font-bold'
+                      : 'bg-white hover:bg-slate-200 text-slate-700 border border-slate-200'
+                  }`}
+                >
+                  <span>{opt.label}</span>
+                  <span className={`ml-1.5 font-mono text-[11px] ${isSelected ? 'text-emerald-100' : 'text-emerald-700 font-bold'}`}>
+                    ₹{opt.rate}
                   </span>
-                ) : (
-                  <span className="text-rose-400 flex items-center gap-0.5">
-                    <TrendingDown className="w-3 h-3" /> {trendData.trend30dPct}%
-                  </span>
-                )}
-                <span className="text-slate-400 font-normal">vs last month</span>
-              </div>
-            </div>
-
-            {/* CPCB Minimum Floor Rate */}
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-3.5">
-              <div className="text-[11px] font-mono text-slate-400 font-semibold uppercase">CPCB Statutory Floor (MSP)</div>
-              <div className="flex items-baseline gap-2 mt-1">
-                <span className="text-2xl sm:text-3xl font-black font-mono text-amber-400">
-                  ₹{trendData.cpcbFloorRate}
-                </span>
-                <span className="text-xs font-mono text-slate-400">/ kg</span>
-              </div>
-              <div className="text-[11px] text-amber-300 font-mono mt-1 flex items-center gap-1">
-                <ShieldCheck className="w-3 h-3" /> Minimum Legal Payout
-              </div>
-            </div>
-
-            {/* 30-Day High / Low Range */}
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-3.5">
-              <div className="text-[11px] font-mono text-slate-400 font-semibold uppercase">30-Day Price Range</div>
-              <div className="text-sm font-black font-mono text-slate-200 mt-1">
-                <span className="text-rose-400">₹{trendData.low30d}</span>
-                <span className="text-slate-500 mx-1.5">—</span>
-                <span className="text-emerald-400">₹{trendData.high30d}</span>
-              </div>
-              <div className="text-[11px] text-slate-400 font-mono mt-1">
-                Volatility Index: <span className="text-indigo-300 font-bold">{trendData.volatilityIndex}%</span>
-              </div>
-            </div>
-
-            {/* AI Price Forecast */}
-            <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-3.5">
-              <div className="text-[11px] font-mono text-slate-400 font-semibold uppercase flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-indigo-400" /> AI 15-Day Forecast
-              </div>
-              <div className="text-base font-black font-mono text-indigo-300 mt-1 flex items-center gap-1">
-                {trendData.forecastChangePct >= 0 ? `+${trendData.forecastChangePct}%` : `${trendData.forecastChangePct}%`}
-                <span className="text-xs font-normal text-slate-400">expected</span>
-              </div>
-              <div className="text-[10px] text-slate-400 mt-1 line-clamp-2 leading-tight">
-                {trendData.forecastNextMonth}
-              </div>
-            </div>
+                </button>
+              );
+            })}
           </div>
+        </div>
 
-          {/* Interactive Chart Container */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-3xl p-4 sm:p-5">
-            {/* Chart Toolbar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800/80">
-              <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4 text-emerald-400" />
-                <span className="text-xs font-bold text-white uppercase font-mono tracking-wider">
-                  Price Fluctuation & Trading Volume Curve
-                </span>
+        {/* MAIN BODY: Graph & KPIs Placed Together at Top so it is Instantly Visible */}
+        <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
+          {/* TOP GRAPH PANEL: DIRECTLY VISIBLE ON SCREEN */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+            {/* Chart Toolbar: Metrics Summary & Timeline Selectors */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div className="flex flex-wrap items-center gap-3 sm:gap-6">
+                <div>
+                  <span className="text-[10px] font-mono font-bold uppercase text-slate-400 block">Spot Mandi Rate</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-2xl font-black font-mono text-emerald-600">
+                      ₹{trendData.currentRate}
+                    </span>
+                    <span className="text-xs font-mono text-slate-500">/kg</span>
+                    <span className={`text-xs font-bold font-mono ml-1 ${isPositiveTrend ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {isPositiveTrend ? `+${trendData.trend30dPct}%` : `${trendData.trend30dPct}%`}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="hidden sm:block h-8 w-px bg-slate-200" />
+
+                <div>
+                  <span className="text-[10px] font-mono font-bold uppercase text-slate-400 block">Statutory Floor (MSP)</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-xl font-bold font-mono text-amber-600">
+                      ₹{trendData.cpcbFloorRate}
+                    </span>
+                    <span className="text-xs font-mono text-slate-500">/kg</span>
+                  </div>
+                </div>
+
+                <div className="hidden md:block h-8 w-px bg-slate-200" />
+
+                <div className="hidden md:block">
+                  <span className="text-[10px] font-mono font-bold uppercase text-slate-400 block">30D Range & Volatility</span>
+                  <div className="text-xs font-mono font-bold text-slate-700">
+                    ₹{trendData.low30d} — ₹{trendData.high30d} <span className="text-indigo-600 font-normal">({trendData.volatilityIndex}% vol)</span>
+                  </div>
+                </div>
               </div>
 
               {/* Timeline Toggles */}
-              <div className="flex items-center bg-slate-850 p-1 rounded-xl border border-slate-800 self-start sm:self-auto">
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 self-start sm:self-auto">
                 {(['7d', '30d', '90d', '1y'] as const).map((t) => (
                   <button
                     key={t}
@@ -222,8 +247,8 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
                     onClick={() => setTimeline(t)}
                     className={`px-3 py-1 text-xs font-bold font-mono rounded-lg transition-all cursor-pointer ${
                       timeline === t
-                        ? 'bg-emerald-600 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
                     }`}
                   >
                     {t === '7d' ? '7 Days' : t === '30d' ? '30 Days' : t === '90d' ? '90 Days' : '1 Year'}
@@ -232,27 +257,23 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
               </div>
             </div>
 
-            {/* Visual Recharts Area / Line Chart */}
-            <div className="h-64 sm:h-72 w-full pt-4">
+            {/* DIRECT VISIBLE RECHARTS AREA */}
+            <div className="h-64 sm:h-72 w-full pt-3">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart
                   data={chartSeries}
-                  margin={{ top: 10, right: 10, left: -15, bottom: 0 }}
+                  margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
                 >
                   <defs>
-                    <linearGradient id="colorSpot" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
-                    </linearGradient>
-                    <linearGradient id="colorLme" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.2} />
-                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0.0} />
+                    <linearGradient id="colorSpotLight" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#059669" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#059669" stopOpacity={0.0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis
                     dataKey="date"
-                    stroke="#94a3b8"
+                    stroke="#64748b"
                     fontSize={11}
                     tickFormatter={(val) => {
                       const parts = val.split('-');
@@ -261,40 +282,40 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
                     tickLine={false}
                   />
                   <YAxis
-                    stroke="#94a3b8"
+                    stroke="#64748b"
                     fontSize={11}
                     domain={['dataMin - 15', 'dataMax + 15']}
                     tickFormatter={(val) => `₹${val}`}
                     tickLine={false}
                   />
                   <Tooltip
-                    content={({ active, payload, label }) => {
+                    content={({ active, payload }) => {
                       if (active && payload && payload.length) {
                         const data = payload[0].payload as LotPricePoint;
                         return (
-                          <div className="bg-slate-900/95 border border-slate-700 rounded-2xl p-3 shadow-xl backdrop-blur-md text-xs font-mono text-slate-200">
-                            <div className="text-slate-400 font-bold mb-1.5 flex items-center justify-between gap-4">
+                          <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-lg text-xs font-mono text-slate-800">
+                            <div className="text-slate-500 font-bold mb-1.5 flex items-center justify-between gap-4">
                               <span>{data.date}</span>
-                              <span className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-emerald-400">
+                              <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded text-emerald-700 font-bold">
                                 Vol: {data.volumeKg} kg
                               </span>
                             </div>
                             <div className="space-y-1">
                               <div className="flex justify-between gap-4">
-                                <span className="text-emerald-400 font-bold">Spot Payout:</span>
-                                <span className="font-bold text-white">₹{data.marketSpotRate} / kg</span>
+                                <span className="text-emerald-700 font-bold">Spot Payout:</span>
+                                <span className="font-bold text-slate-900">₹{data.marketSpotRate} / kg</span>
                               </div>
                               <div className="flex justify-between gap-4">
-                                <span className="text-amber-400">CPCB Floor (MSP):</span>
-                                <span className="text-slate-300">₹{data.cpcbRate} / kg</span>
+                                <span className="text-amber-700">CPCB Floor (MSP):</span>
+                                <span className="text-slate-600">₹{data.cpcbRate} / kg</span>
                               </div>
                               <div className="flex justify-between gap-4">
-                                <span className="text-indigo-400">LME/MCX Ref:</span>
-                                <span className="text-slate-300">₹{data.lmeEquivRate} / kg</span>
+                                <span className="text-indigo-700">LME/MCX Ref:</span>
+                                <span className="text-slate-600">₹{data.lmeEquivRate} / kg</span>
                               </div>
-                              <div className="flex justify-between gap-4 border-t border-slate-800 pt-1 text-[11px]">
-                                <span className="text-slate-400">Daily Range:</span>
-                                <span className="text-slate-300">₹{data.low} - ₹{data.high}</span>
+                              <div className="flex justify-between gap-4 border-t border-slate-100 pt-1 text-[11px] text-slate-500">
+                                <span>Day Range:</span>
+                                <span>₹{data.low} - ₹{data.high}</span>
                               </div>
                             </div>
                           </div>
@@ -305,18 +326,18 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
                   />
                   <Legend
                     verticalAlign="top"
-                    height={36}
+                    height={32}
                     formatter={(value) => {
-                      return <span className="text-xs text-slate-300 font-mono font-medium">{value}</span>;
+                      return <span className="text-xs text-slate-700 font-mono font-medium">{value}</span>;
                     }}
                   />
                   <ReferenceLine
                     y={trendData.cpcbFloorRate}
-                    stroke="#f59e0b"
+                    stroke="#d97706"
                     strokeDasharray="4 4"
                     label={{
-                      value: `MSP Floor (₹${trendData.cpcbFloorRate})`,
-                      fill: '#f59e0b',
+                      value: `MSP Floor ₹${trendData.cpcbFloorRate}`,
+                      fill: '#d97706',
                       fontSize: 10,
                       position: 'insideBottomRight'
                     }}
@@ -324,17 +345,17 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
                   <Area
                     type="monotone"
                     dataKey="marketSpotRate"
-                    name="Market Spot Rate (₹/kg)"
-                    stroke="#10b981"
+                    name="Spot Rate (₹/kg)"
+                    stroke="#059669"
                     strokeWidth={2.5}
                     fillOpacity={1}
-                    fill="url(#colorSpot)"
+                    fill="url(#colorSpotLight)"
                   />
                   <Line
                     type="monotone"
                     dataKey="lmeEquivRate"
-                    name="LME / MCX Benchmark (₹/kg)"
-                    stroke="#6366f1"
+                    name="LME Index (₹/kg)"
+                    stroke="#4f46e5"
                     strokeWidth={1.5}
                     strokeDasharray="2 2"
                     dot={false}
@@ -342,8 +363,8 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
                   <Line
                     type="monotone"
                     dataKey="cpcbRate"
-                    name="CPCB Floor Rate (₹/kg)"
-                    stroke="#f59e0b"
+                    name="Statutory Floor (₹/kg)"
+                    stroke="#d97706"
                     strokeWidth={1.5}
                     dot={false}
                   />
@@ -351,144 +372,73 @@ export const LotPriceHistoryModal: React.FC<LotPriceHistoryModalProps> = ({
               </ResponsiveContainer>
             </div>
 
-            {/* Trading Volume Sub-note */}
-            <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 mt-2 px-2 border-t border-slate-800/80 pt-2">
+            {/* Legend & Mass Balance notice */}
+            <div className="flex flex-wrap items-center justify-between text-[11px] font-mono text-slate-500 mt-2 px-1 border-t border-slate-100 pt-2 gap-2">
               <span className="flex items-center gap-1.5">
-                <Info className="w-3.5 h-3.5 text-slate-500" />
+                <Info className="w-3.5 h-3.5 text-slate-400" />
                 Aggregated from 128 authorized recyclers across Maharashtra, Gujarat, Delhi NCR, and Karnataka.
               </span>
-              <span className="text-emerald-400 font-semibold">Verified Mass-Balance Feed</span>
+              <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                Verified Mass-Balance Feed
+              </span>
             </div>
           </div>
 
-          {/* CRM (Critical Raw Material) Composition Breakdown */}
-          <div className="bg-slate-800/40 border border-slate-700/60 rounded-2xl p-4 sm:p-5">
-            <h3 className="text-xs font-bold text-slate-200 uppercase font-mono mb-3 flex items-center gap-2">
-              <Award className="w-4 h-4 text-amber-400" />
-              CRM Elemental Yields Driving Valuation
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <div className="bg-slate-900/80 border border-slate-700/60 rounded-xl p-3 text-center">
-                <div className="text-[10px] font-mono text-slate-400 uppercase">Copper (Cu)</div>
-                <div className="text-lg font-black font-mono text-amber-400 mt-0.5">
-                  {trendData.crmComposition.copperPct}%
-                </div>
-                <div className="text-[10px] text-slate-500">Pure Grade Cu</div>
+          {/* CRM COMPOSITION METRICS & FORECAST */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {/* AI Forecast */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+              <div className="text-[10px] font-mono font-bold uppercase text-slate-500 flex items-center gap-1 mb-1">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600" /> AI 15-Day Outlook
               </div>
-
-              <div className="bg-slate-900/80 border border-slate-700/60 rounded-xl p-3 text-center">
-                <div className="text-[10px] font-mono text-slate-400 uppercase">Gold (Au) Yield</div>
-                <div className="text-lg font-black font-mono text-yellow-400 mt-0.5">
-                  {trendData.crmComposition.goldGramsPerTon} g/t
-                </div>
-                <div className="text-[10px] text-slate-500">Gold Plated Contacts</div>
+              <div className="text-sm font-bold text-indigo-900">
+                {trendData.forecastNextMonth}
               </div>
+              <p className="text-[11px] text-slate-500 mt-1">
+                Calculated by tracking London Metal Exchange (LME) and MCX refined spot metals.
+              </p>
+            </div>
 
-              <div className="bg-slate-900/80 border border-slate-700/60 rounded-xl p-3 text-center">
-                <div className="text-[10px] font-mono text-slate-400 uppercase">Lithium (Li)</div>
-                <div className="text-lg font-black font-mono text-teal-400 mt-0.5">
-                  {trendData.crmComposition.lithiumPct}%
-                </div>
-                <div className="text-[10px] text-slate-500">Battery Salts</div>
+            {/* Critical Raw Material Yields */}
+            <div className="md:col-span-2 bg-slate-50 border border-slate-200 rounded-2xl p-4">
+              <div className="text-[10px] font-mono font-bold uppercase text-slate-500 flex items-center gap-1 mb-2">
+                <Award className="w-3.5 h-3.5 text-amber-600" /> Critical Raw Material (CRM) Recoverable Elements
               </div>
-
-              <div className="bg-slate-900/80 border border-slate-700/60 rounded-xl p-3 text-center">
-                <div className="text-[10px] font-mono text-slate-400 uppercase">Cobalt (Co)</div>
-                <div className="text-lg font-black font-mono text-blue-400 mt-0.5">
-                  {trendData.crmComposition.cobaltPct}%
+              <div className="grid grid-cols-4 gap-2 text-center font-mono">
+                <div className="bg-white border border-slate-200 rounded-xl p-2 shadow-2xs">
+                  <div className="text-[10px] text-slate-400 uppercase">Copper (Cu)</div>
+                  <div className="text-base font-black text-amber-700">{trendData.crmComposition.copperPct}%</div>
                 </div>
-                <div className="text-[10px] text-slate-500">Cathode Precursor</div>
-              </div>
-
-              <div className="bg-slate-900/80 border border-slate-700/60 rounded-xl p-3 text-center col-span-2 sm:col-span-1">
-                <div className="text-[10px] font-mono text-slate-400 uppercase">Neodymium (Nd)</div>
-                <div className="text-lg font-black font-mono text-purple-400 mt-0.5">
-                  {trendData.crmComposition.neodymiumPct}%
+                <div className="bg-white border border-slate-200 rounded-xl p-2 shadow-2xs">
+                  <div className="text-[10px] text-slate-400 uppercase">Gold (Au)</div>
+                  <div className="text-base font-black text-yellow-600">{trendData.crmComposition.goldGramsPerTon} g/t</div>
                 </div>
-                <div className="text-[10px] text-slate-500">Rare-Earth Magnet</div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 shadow-2xs">
+                  <div className="text-[10px] text-slate-400 uppercase">Lithium (Li)</div>
+                  <div className="text-base font-black text-teal-700">{trendData.crmComposition.lithiumPct}%</div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-xl p-2 shadow-2xs">
+                  <div className="text-[10px] text-slate-400 uppercase">Cobalt (Co)</div>
+                  <div className="text-base font-black text-indigo-700">{trendData.crmComposition.cobaltPct}%</div>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Cross-Vendor Real-Time Settlement Records for this Material */}
-          {relatedTransactions.length > 0 && (
-            <div className="bg-slate-800/40 border border-slate-700/60 rounded-2xl p-4 sm:p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-bold text-slate-200 uppercase font-mono flex items-center gap-2">
-                  <Building2 className="w-4 h-4 text-emerald-400" />
-                  Recent Multi-Vendor Verified Settlements for this Lot Material
-                </h3>
-                <span className="text-[11px] font-mono text-slate-400">
-                  {relatedTransactions.length} Verified Records
-                </span>
-              </div>
-
-              <div className="overflow-x-auto rounded-xl border border-slate-700/80">
-                <table className="w-full text-left text-xs font-mono">
-                  <thead className="bg-slate-900 text-slate-400 uppercase tracking-wider border-b border-slate-700">
-                    <tr>
-                      <th className="py-2.5 px-3">Date</th>
-                      <th className="py-2.5 px-3">Buyer (Vendor / Plant)</th>
-                      <th className="py-2.5 px-3">Seller (Collector)</th>
-                      <th className="py-2.5 px-3">Weight</th>
-                      <th className="py-2.5 px-3">Settled Rate</th>
-                      <th className="py-2.5 px-3">Total Payout</th>
-                      <th className="py-2.5 px-3">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800 text-slate-300">
-                    {relatedTransactions.map((tx) => (
-                      <tr key={tx.id} className="hover:bg-slate-800/50 transition-colors">
-                        <td className="py-2 px-3 text-slate-400 whitespace-nowrap">{tx.date}</td>
-                        <td className="py-2 px-3 font-semibold text-white whitespace-nowrap">
-                          {tx.vendorName}
-                        </td>
-                        <td className="py-2 px-3 text-slate-300 whitespace-nowrap">
-                          {tx.collectorName}
-                        </td>
-                        <td className="py-2 px-3 text-emerald-400 font-bold whitespace-nowrap">
-                          {tx.weighbridgeWeightKg || tx.declaredWeightKg} kg
-                        </td>
-                        <td className="py-2 px-3 font-bold text-white whitespace-nowrap">
-                          ₹{tx.ratePerKg} / kg
-                        </td>
-                        <td className="py-2 px-3 font-black text-amber-400 whitespace-nowrap">
-                          ₹{tx.totalAmount.toLocaleString('en-IN')}
-                        </td>
-                        <td className="py-2 px-3 whitespace-nowrap">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              tx.paymentStatus === 'settled'
-                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                                : tx.paymentStatus === 'flagged'
-                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                            }`}
-                          >
-                            {tx.paymentStatus.toUpperCase()}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* Modal Footer */}
-        <div className="p-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs font-mono text-slate-400">
-          <div className="flex items-center gap-1.5 text-emerald-400">
-            <CheckCircle2 className="w-4 h-4" />
-            <span>Regulated under CPCB Extended Producer Responsibility (EPR) Gazette 2026</span>
+        {/* MODAL FOOTER */}
+        <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs font-mono text-slate-600">
+          <div className="flex items-center gap-1.5 text-emerald-700 font-semibold">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            <span>Statutory Floor Mandate: CPCB E-Waste (Management) Rules, 2022</span>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl transition-colors cursor-pointer"
+            className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
           >
-            Dismiss
+            Close Graph
           </button>
         </div>
       </div>
