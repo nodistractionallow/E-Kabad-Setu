@@ -8,6 +8,7 @@ import { CollectorOrdersManagement } from './CollectorOrdersManagement';
 import { LotPriceHistoryModal } from './LotPriceHistoryModal';
 import { NewOrderQrModal } from './NewOrderQrModal';
 import { QRCodeSVG } from 'qrcode.react';
+import { getLiveTrackingUrl, getLiveAppOrigin } from '../utils/trackingUrl';
 
 import { 
   TrendingUp, 
@@ -1699,7 +1700,7 @@ export const CollectorMobileApp: React.FC = () => {
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-4">
               <div className="w-48 h-48 bg-white p-2.5 rounded-xl flex flex-col items-center justify-center relative border border-slate-200">
                 <QRCodeSVG 
-                  value={`https://e-kabad-setu.vercel.app/?orderId=${encodeURIComponent(activeCreatedLot.id)}&view=order_status`} 
+                  value={getLiveTrackingUrl(activeCreatedLot.id)} 
                   size={170} 
                   level={"H"}
                   includeMargin={false}
@@ -1712,7 +1713,7 @@ export const CollectorMobileApp: React.FC = () => {
                 </div>
               </div>
               <div className="mt-2 text-[10px] font-mono text-emerald-800 font-bold">
-                e-kabad-setu.vercel.app
+                https://e-kabad-setu.vercel.app
               </div>
             </div>
 

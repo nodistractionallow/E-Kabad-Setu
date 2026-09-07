@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { EWasteLot } from '../types';
 import { playFeedbackChime } from '../utils/speech';
+import { getLiveTrackingUrl, getVercelTrackingUrl, getLiveAppOrigin, VERCEL_DOMAIN } from '../utils/trackingUrl';
 
 interface PublicOrderTrackingViewProps {
   orderId: string;
@@ -56,11 +57,11 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
     photoUrl: 'https://images.unsplash.com/photo-1597733336794-12d05021d510?w=400&auto=format&fit=crop&q=80'
   };
 
-  const trackingUrl = `https://e-kabad-setu.vercel.app/?orderId=${encodeURIComponent(displayLot.id)}&view=order_status`;
-  const qrCodeImgSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=4&data=${encodeURIComponent(trackingUrl)}`;
+  const liveTrackingUrl = getLiveTrackingUrl(displayLot.id);
+  const qrCodeImgSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=4&data=${encodeURIComponent(liveTrackingUrl)}`;
 
   const handleCopyLink = () => {
-    navigator.clipboard.writeText(trackingUrl);
+    navigator.clipboard.writeText(liveTrackingUrl);
     setCopied(true);
     playFeedbackChime('beep');
     setTimeout(() => setCopied(false), 3000);

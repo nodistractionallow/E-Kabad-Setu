@@ -6,6 +6,8 @@ import { LotPriceHistoryModal } from './LotPriceHistoryModal';
 import { QRCodeSVG } from 'qrcode.react';
 import { playFeedbackChime } from '../utils/speech';
 import { parseDateTimeToMs } from '../utils/dateTime';
+import { getLiveTrackingUrl } from '../utils/trackingUrl';
+import { useApp } from '../context/AppContext';
 import { 
   Package, 
   Clock, 
@@ -46,6 +48,8 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
   onOpenQrPass,
   onNavigateToScan
 }) => {
+  const { setActivePublicOrderId } = useApp();
+
   // Folder sub-tab: 'pending' | 'completed' | 'quarantined'
   const [activeFolder, setActiveFolder] = useState<'pending' | 'completed' | 'quarantined'>('pending');
 
@@ -773,12 +777,7 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-4">
               <div className="w-44 h-44 bg-white p-2 rounded-xl flex flex-col items-center justify-center relative border border-slate-200">
                 <QRCodeSVG
-                  value={JSON.stringify({
-                    lotId: viewingQrLot.id,
-                    collectorId: collector.id,
-                    material: viewingQrLot.materialName,
-                    weight: viewingQrLot.weightKg
-                  })}
+                  value={getLiveTrackingUrl(viewingQrLot.id)}
                   size={160}
                   level={"H"}
                   includeMargin={false}
@@ -790,6 +789,9 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                   </div>
                 </div>
               </div>
+              <p className="text-[10px] text-emerald-800 font-mono font-bold mt-2">
+                https://e-kabad-setu.vercel.app
+              </p>
             </div>
 
             <div className="bg-slate-50 rounded-2xl p-3 text-left border border-slate-200 text-xs space-y-1.5 font-mono mb-4">
@@ -815,13 +817,26 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setViewingQrLot(null)}
-              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs text-xs"
-            >
-              Close Pass
-            </button>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const targetId = viewingQrLot.id;
+                  setViewingQrLot(null);
+                  setActivePublicOrderId(targetId);
+                }}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span>View Live Order Status Page ↗</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingQrLot(null)}
+                className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                Close Pass
+              </button>
+            </div>
           </div>
         </div>
       )}
