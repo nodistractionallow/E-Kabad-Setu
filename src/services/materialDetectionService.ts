@@ -212,15 +212,22 @@ export class MaterialDetectionService {
   }
 
   /**
-   * MAXIMALLY SENSITIVE Face Detector:
-   * Uses a wide YCbCr skin locus covering all skin tones including
-   * overexposed light skin and Indian/South-Asian skin tones.
+   * STRICT Face Detector — calibrated to avoid false positives on:
+   *   • Red/orange copper wires (high R, low B → Cr too high, b < g fails)
+   *   • Yellow/golden PCB traces (low Cr)
+   *   • Packaging, cardboard, product boxes
    *
-   * Trigger conditions (OR logic for maximum sensitivity):
-   * 1. skinRatio >= 0.18 → Large skin area: immediate face flag regardless of geometry
-   * 2. skinRatio >= 0.07 AND faceConfidence >= 0.45 → Composite geometric check
+   * Skin tone locus (YCbCr, ITU-R BT.601):
+   *   Cb ∈ [80, 125], Cr ∈ [135, 175]
+   *   R > G > B  (ALL THREE, restores copper wire exclusion)
+   *   (R − G) ≥ 15
+   *   B ≥ 30  (exclude saturated reds/oranges where blue is near-zero)
+   *   G ≥ 55  (exclude very dark or fully-saturated reds)
    *
-   * Widened YCbCr locus: Cb [72, 132], Cr [128, 178], R > G, (R-G) >= 8
+   * Face acceptance criteria:
+   *   skinRatio ≥ 28%  → immediate flag (prominent face/selfie)
+   *   skinRatio ≥ 15%  → continue to geometry check
+   *   faceConfidence ≥ 0.68  → face accepted
    */
   private detectHumanFace(
     data: Uint8ClampedArray,
@@ -231,8 +238,6 @@ export class MaterialDetectionService {
     sampleH: number
   ): { isFaceDetected: boolean; confidence: number } {
     let skinPixelCount = 0;
-    let skinCenterX = 0;
-    let skinCenterY = 0;
 
     let minX = sampleW;
     let maxX = 0;
@@ -250,24 +255,24 @@ export class MaterialDetectionService {
         const g = data[idx + 1];
         const b = data[idx + 2];
 
-        // WIDENED YCbCr skin locus — covers light, medium, dark and Indian skin tones
-        // Cb: [72, 132] (widened from 77–127), Cr: [128, 178] (widened from 133–173)
+        // YCbCr chrominance conversion
         const cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 128;
         const cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 128;
 
-        // Relaxed condition: (R-G) >= 8 (was 12), wider Cb/Cr, R > 60 to exclude near-black
+        // Strict skin locus: narrow Cb/Cr, require R > G > B (not just R > G)
+        // Critical: g > b is what excludes copper wires (orange/red with very low blue)
+        // Critical: b >= 30 excludes saturated oranges (copper, rust, packaging)
+        // Critical: g >= 55 excludes very dark reds and ensures warm but not saturated
         const isSkin =
-          cb >= 72 && cb <= 132 &&
-          cr >= 128 && cr <= 178 &&
-          r > g &&
-          (r - g) >= 8 &&
-          r > 60;
+          cb >= 80 && cb <= 125 &&
+          cr >= 135 && cr <= 175 &&
+          r > g && g > b &&       // ALL THREE — key copper wire exclusion
+          (r - g) >= 15 &&
+          b >= 30 &&              // min blue: excludes orange/copper wires
+          g >= 55;                // min green: excludes dark reds
 
         if (isSkin) {
           skinPixelCount++;
-          skinCenterX += x;
-          skinCenterY += y;
-
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
           if (y < minY) minY = y;
@@ -279,14 +284,13 @@ export class MaterialDetectionService {
     const sampledPixels = (sampleW * sampleH) / (step * step);
     const skinRatio = skinPixelCount / sampledPixels;
 
-    // SHORTCUT: Very large skin area (>= 18%) → immediate face flag
-    // This catches selfies, close-up portraits, and partial faces confidently
-    if (skinRatio >= 0.18) {
-      return { isFaceDetected: true, confidence: 0.90 };
+    // Immediate flag: very large skin area (≥ 28%) — clear selfie/portrait
+    if (skinRatio >= 0.28) {
+      return { isFaceDetected: true, confidence: 0.92 };
     }
 
-    // Minimum skin threshold lowered to 7% (was 12%) to catch partial / side faces
-    if (skinRatio < 0.07 || skinPixelCount === 0) {
+    // Minimum skin threshold: 15% (strict — avoids triggering on scrap with small warm patches)
+    if (skinRatio < 0.15 || skinPixelCount === 0) {
       return { isFaceDetected: false, confidence: 0 };
     }
 
@@ -298,9 +302,10 @@ export class MaterialDetectionService {
 
     const aspectRatio = faceHeight / faceWidth;
 
-    // Widened aspect ratio range: 0.9–2.2 (was 1.05–1.95)
-    // Catches tilted/angled/side-profile faces
-    const isHumanOval = aspectRatio >= 0.9 && aspectRatio <= 2.2;
+    // Strict face aspect ratio: 1.0–1.8 (human face shape)
+    // Copper wire coils are often circular (aspect ≈ 1.0) but this alone won't reject them
+    // since the g>b condition should already filter out wire pixels
+    const isHumanOval = aspectRatio >= 1.0 && aspectRatio <= 1.8;
 
     // Eye-socket darkness valley check
     const midY = Math.floor((minY + maxY) / 2);
@@ -325,19 +330,19 @@ export class MaterialDetectionService {
     const avgUpperLum = upperCount > 0 ? upperLuminance / upperCount : 128;
     const avgMidLum = midCount > 0 ? midLuminance / midCount : 128;
 
-    // Relaxed gradient check: upper band similar or slightly darker (was 1.05)
-    const hasFacialLuminanceGradient = avgUpperLum <= avgMidLum * 1.12;
+    // Eye sockets / hair darker than cheeks — strict check (≤ 1.04)
+    const hasFacialLuminanceGradient = avgUpperLum <= avgMidLum * 1.04;
 
-    // Composite face confidence scoring
+    // Composite face confidence
     let faceConfidence = 0;
     if (isHumanOval) faceConfidence += 0.40;
-    if (skinRatio >= 0.10) faceConfidence += 0.35;      // lowered from 0.16
-    else if (skinRatio >= 0.07) faceConfidence += 0.20; // partial credit for small skin areas
+    if (skinRatio >= 0.20) faceConfidence += 0.35;       // high skin ratio
+    else if (skinRatio >= 0.15) faceConfidence += 0.15;  // marginal — needs strong geometry
     if (hasFacialLuminanceGradient) faceConfidence += 0.25;
 
-    // LOWERED trigger threshold: 0.45 (was 0.65) — catches partial/angled/side faces
+    // Strict trigger: 0.68 — must have both oval shape AND reasonable skin ratio
     return {
-      isFaceDetected: faceConfidence >= 0.45,
+      isFaceDetected: faceConfidence >= 0.68,
       confidence: Math.round(faceConfidence * 100) / 100
     };
   }

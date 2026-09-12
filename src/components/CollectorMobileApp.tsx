@@ -1388,7 +1388,12 @@ export const CollectorMobileApp: React.FC = () => {
                       )}
                     </div>
                     <div className="text-xs text-slate-500 font-mono mt-1">
-                      {lot.id} • {lot.weightKg} kg @ ₹{lot.ratePerKg}
+                      {lot.id} • {lot.weightKg} kg
+                      {lot.ratePerKg === 0 && lot.materialName === 'Other E-waste' ? (
+                        <span className="ml-1 bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded font-black text-[10px]">@ TBD</span>
+                      ) : (
+                        <span> @ ₹{lot.ratePerKg}</span>
+                      )}
                     </div>
                     <div className="text-xs text-slate-400 font-mono mt-0.5">
                       {lot.timestamp}
@@ -1396,9 +1401,15 @@ export const CollectorMobileApp: React.FC = () => {
                   </div>
 
                   <div className="text-right">
-                    <div className="text-base font-bold font-mono text-slate-900">
-                      ₹{lot.totalAmount}
-                    </div>
+                    {lot.ratePerKg === 0 && lot.materialName === 'Other E-waste' ? (
+                      <div className="text-xs font-black font-mono text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
+                        {language === 'hi' ? 'भाव TBD' : language === 'mr' ? 'दर TBD' : 'Rate TBD'}
+                      </div>
+                    ) : (
+                      <div className="text-base font-bold font-mono text-slate-900">
+                        ₹{lot.totalAmount}
+                      </div>
+                    )}
                     <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full font-mono inline-block mt-1 ${
                       lot.status === 'paid'
                         ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
@@ -1574,7 +1585,8 @@ export const CollectorMobileApp: React.FC = () => {
                     lotId: activeCreatedLot.id,
                     collectorId: collector.id,
                     material: activeCreatedLot.materialName,
-                    weight: activeCreatedLot.weightKg
+                    weight: activeCreatedLot.weightKg,
+                    priceTBD: activeCreatedLot.ratePerKg === 0 && activeCreatedLot.materialName === 'Other E-waste'
                   })} 
                   size={170} 
                   level={"H"}
@@ -1589,14 +1601,47 @@ export const CollectorMobileApp: React.FC = () => {
               </div>
             </div>
 
+            {/* TBD notice banner for Other E-waste */}
+            {activeCreatedLot.ratePerKg === 0 && activeCreatedLot.materialName === 'Other E-waste' && (
+              <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-2.5 mb-3 flex items-start gap-2 text-left">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-xs font-extrabold text-amber-900 uppercase tracking-wide">
+                    {language === 'hi' ? 'भाव: कारखाना तय करेगा' : language === 'mr' ? 'दर: कारखाना ठरवेल' : 'Price: Factory Will Decide'}
+                  </div>
+                  <div className="text-[11px] text-amber-800 font-medium mt-0.5">
+                    {language === 'hi'
+                      ? 'यह पर्ची वजन के साथ मान्य है। रिसाइक्लर वजन-पुल पर अंतिम भाव तय करेगा।'
+                      : language === 'mr'
+                      ? 'हा स्लिप वजनासह वैध आहे. रिसायकलर वजनपुलावर अंतिम दर ठरवेल.'
+                      : 'This slip is valid with weight only. Recycler will set final rate at weighbridge.'}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="bg-slate-50 rounded-2xl p-4 text-left border border-slate-200 text-xs space-y-2 font-mono mb-4">
               <div className="flex justify-between">
                 <span className="text-slate-500">{t.weightAndRate}</span>
-                <span className="text-slate-900 font-bold">{activeCreatedLot.weightKg} kg @ ₹{activeCreatedLot.ratePerKg}/kg</span>
+                {activeCreatedLot.ratePerKg === 0 && activeCreatedLot.materialName === 'Other E-waste' ? (
+                  <span className="font-bold text-amber-700">
+                    {activeCreatedLot.weightKg} kg @ <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-black">TBD</span>
+                  </span>
+                ) : (
+                  <span className="text-slate-900 font-bold">{activeCreatedLot.weightKg} kg @ ₹{activeCreatedLot.ratePerKg}/kg</span>
+                )}
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">{t.estimatedPayout}</span>
-                <span className="text-emerald-700 font-extrabold text-base">₹{activeCreatedLot.totalAmount}</span>
+                {activeCreatedLot.ratePerKg === 0 && activeCreatedLot.materialName === 'Other E-waste' ? (
+                  <span className="font-extrabold text-base text-amber-700 flex items-center gap-1">
+                    <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-lg border border-amber-300 text-xs font-black tracking-wide">
+                      {language === 'hi' ? 'निर्धारित नहीं' : language === 'mr' ? 'निश्चित नाही' : 'NOT DEFINED'}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="text-emerald-700 font-extrabold text-base">₹{activeCreatedLot.totalAmount}</span>
+                )}
               </div>
               <div className="flex justify-between border-t border-slate-200 pt-1.5">
                 <span className="text-slate-500">{t.matchedRecycler}:</span>
