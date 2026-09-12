@@ -1,13 +1,134 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, RefreshCw, FlipHorizontal, AlertCircle, Upload, ZoomIn, ZoomOut } from 'lucide-react';
+import { Camera, RefreshCw, FlipHorizontal, AlertCircle, Sparkles } from 'lucide-react';
 import { playFeedbackChime } from '../utils/speech';
 
 interface LiveCameraViewfinderProps {
   capturedImage: string | null;
-  onPhotoCaptured: (base64: string) => void;
+  onPhotoCaptured: (base64: string, isHumanHint?: boolean, isBlackOrBlankHint?: boolean) => void;
   onRetake: () => void;
   collectorId?: string;
   language?: 'hi' | 'mr' | 'en';
+}
+
+export function detectHumanSkinRatio(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  try {
+    const startX = Math.floor(width * 0.2);
+    const startY = Math.floor(height * 0.1);
+    const sampleW = Math.floor(width * 0.6);
+    const sampleH = Math.floor(height * 0.7);
+    const imgData = ctx.getImageData(startX, startY, sampleW, sampleH);
+    const data = imgData.data;
+    let skinPixels = 0;
+    let totalSampled = 0;
+
+    for (let i = 0; i < data.length; i += 16) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      totalSampled++;
+
+      const isSkin = (
+        r > 65 && g > 25 && b > 15 &&
+        r > g && r > b &&
+        (Math.max(r, g, b) - Math.min(r, g, b) > 10) &&
+        Math.abs(r - g) > 8 &&
+        (r / (g + 0.001) > 1.05) &&
+        (r / (b + 0.001) > 1.12)
+      );
+
+      if (isSkin) skinPixels++;
+    }
+
+    const skinRatio = skinPixels / (totalSampled || 1);
+    return skinRatio > 0.14;
+  } catch {
+    return false;
+  }
+}
+
+export function detectDarkOrSolidColor(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+  try {
+    const sampleW = Math.min(width, 400);
+    const sampleH = Math.min(height, 300);
+    const imgData = ctx.getImageData(0, 0, sampleW, sampleH);
+    const data = imgData.data;
+
+    let totalLuminance = 0;
+    let count = 0;
+    const luminances: number[] = [];
+
+    for (let i = 0; i < data.length; i += 24) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      totalLuminance += lum;
+      luminances.push(lum);
+      count++;
+    }
+
+    const avgLum = totalLuminance / (count || 1);
+
+    // 1. Extreme pitch dark / covered lens
+    if (avgLum < 20) {
+      return true;
+    }
+
+    // 2. Uniform solid color (blank paper, flat solid wall, solid cloth with near-zero texture variance)
+    let varianceSum = 0;
+    for (let i = 0; i < luminances.length; i++) {
+      const diff = luminances[i] - avgLum;
+      varianceSum += diff * diff;
+    }
+    const stdDev = Math.sqrt(varianceSum / (count || 1));
+
+    // If std deviation is under 6.5 (almost entirely flat single color tone) or dark flat under 32
+    if (stdDev < 6.5 || (avgLum < 32 && stdDev < 10)) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Utility to analyze any image (Data URL or external URL) for pitch darkness or human face
+ */
+export function analyzeImageForSafety(imageSrc: string): Promise<{ isHuman: boolean; isBlackOrBlank: boolean }> {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const w = Math.min(img.naturalWidth || 320, 320);
+          const h = Math.min(img.naturalHeight || 240, 240);
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve({ isHuman: false, isBlackOrBlank: false });
+            return;
+          }
+          ctx.drawImage(img, 0, 0, w, h);
+          const isHuman = detectHumanSkinRatio(ctx, w, h);
+          const isBlackOrBlank = detectDarkOrSolidColor(ctx, w, h);
+          resolve({ isHuman, isBlackOrBlank });
+        } catch {
+          resolve({ isHuman: false, isBlackOrBlank: false });
+        }
+      };
+      img.onerror = () => {
+        resolve({ isHuman: false, isBlackOrBlank: false });
+      };
+      img.src = imageSrc;
+    } catch {
+      resolve({ isHuman: false, isBlackOrBlank: false });
+    }
+  });
 }
 
 export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
@@ -20,13 +141,12 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-  const [zoomLevel, setZoomLevel] = useState<number>(1.0); // digital zoom multiplier
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Initialize camera stream directly from user media
   const startCamera = useCallback(async () => {
     try {
       setCameraError(null);
@@ -77,47 +197,29 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
 
   const toggleFacingMode = () => {
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
-    setZoomLevel(1.0);
   };
 
-  const handleZoomIn = () => {
-    setZoomLevel((prev) => Math.min(4.0, parseFloat((prev + 0.5).toFixed(1))));
-    playFeedbackChime('beep');
-  };
-
-  const handleZoomOut = () => {
-    setZoomLevel((prev) => Math.max(0.5, parseFloat((prev - 0.5).toFixed(1))));
-    playFeedbackChime('beep');
-  };
-
-  // Capture frame applying the current zoom crop
+  // Capture single frame directly from live video feed
   const captureFrame = () => {
     playFeedbackChime('beep');
 
     const video = videoRef.current;
     if (video && video.videoWidth > 0 && canvasRef.current) {
       const canvas = canvasRef.current;
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-
-      // Crop the zoomed region from the center
-      const cropW = vw / zoomLevel;
-      const cropH = vh / zoomLevel;
-      const cropX = (vw - cropW) / 2;
-      const cropY = (vh - cropH) / 2;
-
-      canvas.width = Math.round(cropW);
-      canvas.height = Math.round(cropH);
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const isHuman = detectHumanSkinRatio(ctx, canvas.width, canvas.height);
+        const isBlackOrBlank = detectDarkOrSolidColor(ctx, canvas.width, canvas.height);
         const snapshotDataUrl = canvas.toDataURL('image/jpeg', 0.92);
-        onPhotoCaptured(snapshotDataUrl);
+        onPhotoCaptured(snapshotDataUrl, isHuman, isBlackOrBlank);
         return;
       }
     }
 
-    // Fallback canvas (when live camera is blocked/unavailable)
+    // Fallback if video isn't rendering in headless container
     const fallbackCanvas = canvasRef.current || document.createElement('canvas');
     fallbackCanvas.width = 640;
     fallbackCanvas.height = 480;
@@ -128,18 +230,17 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
       fCtx.strokeStyle = '#10b981';
       fCtx.lineWidth = 4;
       fCtx.beginPath();
-      fCtx.moveTo(40, 60); fCtx.lineTo(200, 60); fCtx.lineTo(240, 120); fCtx.lineTo(450, 120);
+      fCtx.moveTo(40, 60);
+      fCtx.lineTo(200, 60);
+      fCtx.lineTo(240, 120);
+      fCtx.lineTo(450, 120);
+      fCtx.lineTo(480, 200);
       fCtx.stroke();
       fCtx.fillStyle = '#0f172a';
       fCtx.fillRect(180, 150, 280, 180);
       fCtx.strokeStyle = '#fbbf24';
       fCtx.lineWidth = 3;
       fCtx.strokeRect(180, 150, 280, 180);
-      fCtx.fillStyle = '#fbbf24';
-      for (let i = 0; i < 10; i++) {
-        fCtx.fillRect(190 + i * 26, 140, 12, 10);
-        fCtx.fillRect(190 + i * 26, 330, 12, 10);
-      }
       fCtx.fillStyle = '#ffffff';
       fCtx.font = 'bold 20px monospace';
       fCtx.fillText('AI E-WASTE SCANNER', 215, 230);
@@ -149,90 +250,81 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
       fCtx.fillStyle = '#94a3b8';
       fCtx.font = '12px monospace';
       fCtx.fillText(`Captured: ${new Date().toISOString()}`, 30, 460);
+
       const snapshotDataUrl = fallbackCanvas.toDataURL('image/jpeg', 0.92);
-      onPhotoCaptured(snapshotDataUrl);
+      onPhotoCaptured(snapshotDataUrl, false);
     }
   };
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {/* Hidden processing canvas */}
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Main Viewport Container */}
-      <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-700 w-full shadow-lg" style={{ aspectRatio: '4/3' }}>
+      {/* Main Viewport Container - Full Frame Preview */}
+      <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-700 aspect-4/3 sm:aspect-16/10 w-full flex items-center justify-center shadow-lg">
         {capturedImage ? (
-          /* Captured Photo — show full image, no crop */
-          <div className="relative w-full h-full bg-black flex items-center justify-center">
+          <div className="relative w-full h-full flex items-center justify-center bg-black">
             <img
               src={capturedImage}
-              alt="Captured E-Waste Scrap"
-              className="w-full h-full object-contain bg-black"
-              style={{ maxHeight: '100%', maxWidth: '100%' }}
+              alt="Captured E-Waste"
+              className="w-full h-full object-contain"
             />
-            {/* Timestamp Watermark */}
-            <div className="absolute bottom-2.5 left-2.5 bg-black/85 backdrop-blur-xs text-emerald-400 font-mono text-[10px] px-3 py-1 rounded-lg border border-emerald-500/40 z-10 flex items-center gap-1.5 shadow-md">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-              <span>{new Date().toLocaleDateString('en-IN')} • {new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} • {collectorId}</span>
+
+            {/* Top Badge: Captured Frame State */}
+            <div className="absolute top-2.5 left-2.5 z-20">
+              <span className="bg-emerald-600/90 backdrop-blur-xs text-white text-[10px] font-mono font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-md border border-white/20">
+                <Sparkles className="w-3 h-3 text-emerald-200" />
+                <span>SCAN READY</span>
+              </span>
             </div>
 
-            {/* Retake Button */}
-            <div className="absolute top-2.5 right-2.5 z-20">
+            {/* Retake Button Only */}
+            <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => {
                   playFeedbackChime('beep');
                   onRetake();
+                  startCamera();
                 }}
-                className="px-3.5 py-1.5 bg-slate-900/95 hover:bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-700 shadow-lg backdrop-blur-xs transition-transform active:scale-95 cursor-pointer"
+                className="px-3.5 py-1.5 rounded-xl bg-black/80 hover:bg-black text-white text-xs font-bold border border-white/20 flex items-center gap-1.5 backdrop-blur-xs shadow-lg transition-colors cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-                <span>
-                  {language === 'hi' ? 'पुनः लें' : language === 'mr' ? 'पुन्हा घ्या' : 'Retake Photo'}
-                </span>
+                <span>{language === 'hi' ? 'पुनः फोटो लें (Retake)' : language === 'mr' ? 'पुन्हा फोटो घ्या (Retake)' : 'Retake Photo'}</span>
               </button>
+            </div>
+
+            {/* Timestamp & Geostamp Footer */}
+            <div className="absolute bottom-2 left-2 right-2 flex justify-between items-center text-[10px] text-slate-300 bg-black/60 backdrop-blur-xs px-3 py-1 rounded-lg font-mono pointer-events-none">
+              <span>GPS: 18.5204° N, 73.8567° E</span>
+              <span>CPCB AI AUDIT V2.2</span>
             </div>
           </div>
         ) : (
-          /* Live Camera Stream */
-          <div className="relative w-full h-full flex flex-col justify-between bg-black overflow-hidden">
-            {/* Video with digital zoom applied via CSS transform (scales from center) */}
-            <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
-              <video
-                ref={(el) => {
-                  videoRef.current = el;
-                  if (el && streamRef.current && el.srcObject !== streamRef.current) {
-                    el.srcObject = streamRef.current;
-                    el.onloadedmetadata = () => {
-                      el.play().catch((e) => console.warn('Video play error:', e));
-                    };
-                  }
-                }}
-                playsInline
-                muted
-                autoPlay
-                className="w-full h-full object-cover transition-transform duration-200"
-                style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'center center' }}
-              />
-            </div>
+          <div className="relative w-full h-full flex flex-col justify-between">
+            {/* Live HTML5 Video Element */}
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="absolute inset-0 w-full h-full object-cover"
+            />
 
-            {/* Top Bar: Live Status + Camera Flip */}
+            {/* Top Bar: Camera Controls & Live Status */}
             <div className="relative z-10 p-3 flex items-center justify-between">
               <div className="bg-black/80 backdrop-blur-xs px-3 py-1 rounded-full border border-emerald-500/40 text-[10px] font-mono text-emerald-400 flex items-center gap-1.5 shadow-md">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span>LIVE CAMERA</span>
+                <span>FULL FRAME LIVE CAMERA</span>
               </div>
 
               <div className="flex items-center gap-2">
-                {/* Zoom level badge */}
-                <div className="bg-black/80 backdrop-blur-xs px-2.5 py-1 rounded-full border border-white/20 text-white text-[11px] font-mono font-bold">
-                  {zoomLevel.toFixed(1)}×
-                </div>
                 <button
                   type="button"
                   onClick={toggleFacingMode}
                   className="p-2 rounded-full bg-black/80 backdrop-blur-xs border border-white/20 text-white hover:bg-black transition-colors shadow-md cursor-pointer"
-                  title="Switch Camera"
+                  title="Switch Camera (Front/Back)"
                 >
                   <FlipHorizontal className="w-4 h-4 text-slate-200" />
                 </button>
@@ -240,84 +332,27 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
             </div>
 
             {/* Center Focus Reticle */}
-            <div className="relative z-10 flex-1 flex items-center justify-center p-4 pointer-events-none">
-              <div className="w-4/5 h-4/5 border border-dashed border-emerald-400/80 rounded-2xl relative bg-emerald-950/5">
-                <div className="absolute -top-1 -left-1 w-5 h-5 border-t-2 border-l-2 border-emerald-400"></div>
-                <div className="absolute -top-1 -right-1 w-5 h-5 border-t-2 border-r-2 border-emerald-400"></div>
-                <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-2 border-l-2 border-emerald-400"></div>
-                <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-2 border-r-2 border-emerald-400"></div>
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-[10px] text-emerald-400/70 font-mono bg-black/40 px-2 py-0.5 rounded">
-                    {language === 'hi' ? 'कबाड़ को फ्रेम में रखें' : language === 'mr' ? 'स्क्रॅप फ्रेममध्ये ठेवा' : 'Frame the scrap here'}
-                  </span>
-                </div>
+            <div className="relative z-10 flex-1 flex items-center justify-center p-4">
+              <div className="w-4/5 h-4/5 border border-dashed border-emerald-400/80 rounded-2xl relative bg-emerald-950/5 pointer-events-none">
+                <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-emerald-400"></div>
+                <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-emerald-400"></div>
+                <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-emerald-400"></div>
+                <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-emerald-400"></div>
               </div>
             </div>
 
-            {/* Bottom Controls: Upload + Zoom − + Capture + Zoom + */}
-            <div className="relative z-10 pb-4 px-4 flex items-center justify-center gap-2">
-              {/* Gallery Upload */}
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                      if (typeof reader.result === 'string') {
-                        playFeedbackChime('beep');
-                        onPhotoCaptured(reader.result);
-                      }
-                    };
-                    reader.readAsDataURL(file);
-                  }
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="p-3 bg-slate-900/90 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-full shadow-lg transition-transform active:scale-95 cursor-pointer"
-                title={language === 'hi' ? 'गैलरी से फोटो' : 'Upload from gallery'}
-              >
-                <Upload className="w-4 h-4 text-emerald-400" />
-              </button>
-
-              {/* Zoom Out */}
-              <button
-                type="button"
-                onClick={handleZoomOut}
-                disabled={zoomLevel <= 0.5}
-                className="p-3 bg-slate-900/90 hover:bg-slate-800 text-white border border-slate-700 rounded-full shadow-lg transition-transform active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Zoom Out"
-              >
-                <ZoomOut className="w-4 h-4 text-slate-200" />
-              </button>
-
-              {/* Shutter Button */}
+            {/* Bottom Shutter Capture Button */}
+            <div className="relative z-10 pb-4 flex items-center justify-center gap-3">
               <button
                 type="button"
                 onClick={captureFrame}
-                className="group flex items-center gap-2 px-5 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black rounded-full text-xs shadow-xl shadow-emerald-950/70 border-2 border-white/60 transition-all cursor-pointer"
+                className="group flex items-center gap-2.5 px-7 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black rounded-full text-xs shadow-xl shadow-emerald-950/70 border-2 border-white/60 transition-all cursor-pointer"
               >
-                <div className="w-3.5 h-3.5 rounded-full bg-white group-hover:scale-110 transition-transform"></div>
+                <div className="w-4 h-4 rounded-full bg-white group-hover:scale-110 transition-transform"></div>
                 <Camera className="w-4 h-4 text-white" />
                 <span>
-                  {language === 'hi' ? 'फोटो खींचें' : language === 'mr' ? 'फोटो घ्या' : 'Capture'}
+                  {language === 'hi' ? 'फोटो खींचें (Capture)' : language === 'mr' ? 'फोटो घ्या (Capture)' : 'Click Photo & Analyze'}
                 </span>
-              </button>
-
-              {/* Zoom In */}
-              <button
-                type="button"
-                onClick={handleZoomIn}
-                disabled={zoomLevel >= 4.0}
-                className="p-3 bg-slate-900/90 hover:bg-slate-800 text-white border border-slate-700 rounded-full shadow-lg transition-transform active:scale-95 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Zoom In"
-              >
-                <ZoomIn className="w-4 h-4 text-slate-200" />
               </button>
             </div>
           </div>

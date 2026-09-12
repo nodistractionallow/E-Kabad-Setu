@@ -1,34 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import {
-  collection,
-  doc,
-  onSnapshot,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  writeBatch
-} from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility, AuthSession } from '../types';
-import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, MOCK_RECYCLER } from '../data/mockData';
+import { supabase, lotToSupabaseRecord, supabaseRecordToLot } from '../lib/supabase';
+import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility, CategoryApprovalRequest, PartnerRegistration } from '../types';
+import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, MOCK_RECYCLER, INITIAL_CATEGORY_REQUESTS, INITIAL_PARTNER_REGISTRATIONS } from '../data/mockData';
 import { speakVoice, playFeedbackChime, stopVoice } from '../utils/speech';
-import { supabase } from '../lib/supabase';
-import {
-  enqueueSyncAction,
-  processSyncQueue,
-  pullLotsFromSupabase,
-  pullMaterialsFromSupabase,
-  getSyncQueue,
-  mapSupabaseRowToLot,
-} from '../services/syncService';
-import { updateLotInSqlite, saveLotToSqlite, fetchSqliteLots } from '../lib/sqliteClient';
+import { parseDateTimeToMs } from '../utils/dateTime';
 
 interface AppContextType {
   currentView: UserRole;
   setCurrentView: (view: UserRole) => void;
-  authSession: AuthSession | null;
-  login: (role: UserRole, userDetails?: any) => void;
-  logout: () => void;
   language: Language;
   setLanguage: (lang: Language) => void;
   isOnline: boolean;
@@ -38,27 +17,33 @@ interface AppContextType {
   recycler: RecyclerFacility;
   materials: MaterialItem[];
   lots: EWasteLot[];
+  categoryRequests: CategoryApprovalRequest[];
+  partnerRegistrations: PartnerRegistration[];
   activeCreatedLot: EWasteLot | null;
   setActiveCreatedLot: (lot: EWasteLot | null) => void;
   activePublicOrderId: string | null;
-  setActivePublicOrderId: (id: string | null) => void;
-  addLot: (lot: Omit<EWasteLot, 'id' | 'timestamp' | 'status'>) => Promise<EWasteLot>;
-  approveAndPayLot: (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH', overrideRatePerKg?: number) => Promise<void>;
+  setActivePublicOrderId: (orderId: string | null) => void;
+  addLot: (lot: Omit<EWasteLot, 'id' | 'timestamp' | 'status'> & { id?: string }) => Promise<EWasteLot>;
+  approveAndPayLot: (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH') => Promise<void>;
   rejectLot: (lotId: string, reason: string) => Promise<void>;
+  overrideAnomalyLot: (lotId: string) => Promise<void>;
+  rejectAnomalyLot: (lotId: string, reason: string) => Promise<void>;
+  deleteLotWithKey: (lotId: string, adminKey: string) => Promise<boolean>;
   reopenLot?: (lotId: string) => Promise<void>;
+  registerPartner: (partner: Omit<PartnerRegistration, 'id' | 'appliedDate' | 'status'>) => Promise<PartnerRegistration>;
+  approvePartner: (registrationId: string, officerName: string) => Promise<void>;
+  rejectPartner: (registrationId: string, reason: string) => Promise<void>;
+  requestNewCategory: (req: Omit<CategoryApprovalRequest, 'id' | 'timestamp' | 'status'>) => Promise<CategoryApprovalRequest>;
+  approveCategoryRequest: (requestId: string, approvedRatePerKg: number, assignedStandardCategory: string, reviewNotes?: string, reviewedBy?: string) => Promise<void>;
+  rejectCategoryRequest: (requestId: string, rejectionReason: string, reviewedBy?: string) => Promise<void>;
   updateMaterialPrice: (materialId: string, newPrice: number) => Promise<void>;
   addCustomMaterial: (material: MaterialItem) => Promise<void>;
   syncPendingAiClassifications: () => Promise<void>;
   isSyncingOfflineQueue: boolean;
   resetAllData: () => Promise<void>;
-  deleteLotWithKey: (lotId: string, adminKey: string) => Promise<boolean>;
-  restoreLot: (lot: EWasteLot) => Promise<void>;
   speak: (text: string) => void;
   stopAudio: () => void;
   isFirebaseSyncing: boolean;
-  isSupabaseSyncing: boolean;
-  pendingSyncCount: number;
-  triggerSupabaseSync: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -68,40 +53,17 @@ const STORAGE_KEYS = {
   LANG: 'ekabad_lang_v1',
   LOTS: 'ekabad_lots_v1',
   MATERIALS: 'ekabad_materials_v1',
-  COLLECTOR: 'ekabad_collector_v1',
+  COLLECTOR: 'ekabad_collector_v2',
   ONLINE: 'ekabad_online_v1',
-  AUTH_SESSION: 'ekabad_auth_session_v1',
-  RECYCLE_BIN: 'ekabad_govt_recycle_bin_v1',
-  PAID_LOTS: 'ekabad_paid_lots_v1'
+  CATEGORY_REQUESTS: 'ekabad_cat_requests_v1'
 };
 
-export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [authSession, setAuthSession] = useState<AuthSession | null>(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed && parsed.isLoggedIn) {
-          return parsed;
-        }
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  });
+const DEFAULT_MALE_COLLECTOR_PHOTO = 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=400&auto=format&fit=crop&q=80';
 
+export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentView, setCurrentView] = useState<UserRole>(() => {
     try {
-      const storedSession = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
-      if (storedSession) {
-        const parsed = JSON.parse(storedSession);
-        if (parsed && parsed.isLoggedIn && parsed.role) {
-          return parsed.role;
-        }
-      }
-      const storedView = localStorage.getItem(STORAGE_KEYS.VIEW);
-      return (storedView as UserRole) || 'gateway';
+      return (localStorage.getItem(STORAGE_KEYS.VIEW) as UserRole) || 'gateway';
     } catch {
       return 'gateway';
     }
@@ -109,9 +71,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [language, setLanguageState] = useState<Language>(() => {
     try {
-      return (localStorage.getItem(STORAGE_KEYS.LANG) as Language) || 'hi';
+      return (localStorage.getItem(STORAGE_KEYS.LANG) as Language) || 'en';
     } catch {
-      return 'hi';
+      return 'en';
     }
   });
 
@@ -136,40 +98,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [lots, setLots] = useState<EWasteLot[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEYS.LOTS);
-      const parsed: EWasteLot[] = stored ? JSON.parse(stored) : INITIAL_LOTS;
-      const paidRaw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
-      const paidMap: Record<string, Partial<EWasteLot>> = paidRaw ? JSON.parse(paidRaw) : {};
-
-      const merged = parsed.map((lot) => {
-        const paidOverride = paidMap[lot.id.toUpperCase()] || paidMap[lot.id];
-        if (paidOverride) {
-          return {
-            ...lot,
-            ...paidOverride,
-            status: 'paid' as const
-          };
-        }
-        return lot;
-      });
-
-      // Also ensure any paid lot present in paidMap exists in the list
-      Object.keys(paidMap).forEach((idKey) => {
-        const p = paidMap[idKey];
-        if (p && p.id && !merged.some((m) => m.id.toUpperCase() === idKey.toUpperCase())) {
-          merged.unshift(p as EWasteLot);
-        }
-      });
-
-      return merged;
+      return stored ? JSON.parse(stored) : INITIAL_LOTS;
     } catch {
       return INITIAL_LOTS;
     }
   });
 
+  const [categoryRequests, setCategoryRequests] = useState<CategoryApprovalRequest[]>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.CATEGORY_REQUESTS);
+      return stored ? JSON.parse(stored) : INITIAL_CATEGORY_REQUESTS;
+    } catch {
+      return INITIAL_CATEGORY_REQUESTS;
+    }
+  });
+
   const [collector, setCollector] = useState<CollectorProfile>(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEYS.COLLECTOR);
-      return stored ? JSON.parse(stored) : MOCK_COLLECTOR;
+      const stored = localStorage.getItem(STORAGE_KEYS.COLLECTOR) || localStorage.getItem('ekabad_collector_v1');
+      if (stored) {
+        const parsed = JSON.parse(stored) as CollectorProfile;
+        // Cleanse any legacy cached female photo
+        if (!parsed.selfieUrl || parsed.selfieUrl.includes('1544717305') || parsed.selfieUrl.includes('1544724569') || parsed.selfieUrl.includes('1544716278')) {
+          parsed.selfieUrl = DEFAULT_MALE_COLLECTOR_PHOTO;
+        }
+        return parsed;
+      }
+      return MOCK_COLLECTOR;
     } catch {
       return MOCK_COLLECTOR;
     }
@@ -178,29 +133,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [recycler] = useState<RecyclerFacility>(MOCK_RECYCLER);
   const [activeCreatedLot, setActiveCreatedLot] = useState<EWasteLot | null>(null);
   const [activePublicOrderId, setActivePublicOrderId] = useState<string | null>(null);
+  const [partnerRegistrations, setPartnerRegistrations] = useState<PartnerRegistration[]>(() => {
+    try {
+      const stored = localStorage.getItem('ekabad_partner_regs_v1');
+      return stored ? JSON.parse(stored) : INITIAL_PARTNER_REGISTRATIONS;
+    } catch {
+      return INITIAL_PARTNER_REGISTRATIONS;
+    }
+  });
   const [isFirebaseSyncing, setIsFirebaseSyncing] = useState<boolean>(false);
   const [isSyncingOfflineQueue, setIsSyncingOfflineQueue] = useState<boolean>(false);
-  const [isSupabaseSyncing, setIsSupabaseSyncing] = useState<boolean>(false);
-  const [pendingSyncCount, setPendingSyncCount] = useState<number>(() => getSyncQueue().length);
   const hasInitializedFirebase = useRef(false);
   const isSyncingRef = useRef(false);
-
-  // Trigger Supabase queue drain when online
-  const triggerSupabaseSync = async () => {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-    setIsSupabaseSyncing(true);
-    try {
-      const res = await processSyncQueue();
-      setPendingSyncCount(getSyncQueue().length);
-      if (res.syncedCount > 0) {
-        console.log(`[Supabase Sync] Successfully uploaded ${res.syncedCount} queued items to PostgreSQL.`);
-      }
-    } catch (err) {
-      console.warn('[Supabase Sync] Drain error:', err);
-    } finally {
-      setIsSupabaseSyncing(false);
-    }
-  };
 
   // Sync state to local storage as high-speed instant fallback
   useEffect(() => {
@@ -213,18 +157,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     try {
-      if (authSession) {
-        localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(authSession));
-      } else {
-        localStorage.removeItem(STORAGE_KEYS.AUTH_SESSION);
-      }
-    } catch (e) {
-      console.warn('LocalStorage error:', e);
-    }
-  }, [authSession]);
-
-  useEffect(() => {
-    try {
       localStorage.setItem(STORAGE_KEYS.LANG, language);
     } catch (e) {
       console.warn('LocalStorage error:', e);
@@ -232,55 +164,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [language]);
 
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      triggerSupabaseSync();
-    };
+    const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Initial background sync check on load
-    triggerSupabaseSync();
-
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
-
-  // Hydrate from SQLite database backend on boot
-  useEffect(() => {
-    fetchSqliteLots()
-      .then((sqliteLots) => {
-        if (sqliteLots && Array.isArray(sqliteLots) && sqliteLots.length > 0) {
-          setLots((prev) => {
-            const map = new Map<string, EWasteLot>();
-            sqliteLots.forEach((l) => map.set(l.id.toUpperCase(), l));
-            prev.forEach((l) => {
-              const key = l.id.toUpperCase();
-              if (!map.has(key)) {
-                map.set(key, l);
-              } else {
-                const existing = map.get(key)!;
-                if (l.status === 'paid' && existing.status !== 'paid') {
-                  map.set(key, { ...existing, ...l, status: 'paid' });
-                }
-              }
-            });
-            const merged = Array.from(map.values());
-            merged.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-            try {
-              localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(merged));
-            } catch (e) {
-              console.warn(e);
-            }
-            return merged;
-          });
-        }
-      })
-      .catch(console.warn);
   }, []);
 
   useEffect(() => {
@@ -315,171 +208,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [collector]);
 
-  // Real-time Firebase Firestore synchronization across all devices and browsers
   useEffect(() => {
-    let unsubscribeLots: (() => void) | undefined;
-    let unsubscribeMaterials: (() => void) | undefined;
-    let unsubscribeCollector: (() => void) | undefined;
-
     try {
-      setIsFirebaseSyncing(true);
-
-      // 1. Real-time Lots listener
-      const lotsCollectionRef = collection(db, 'lots');
-      unsubscribeLots = onSnapshot(lotsCollectionRef, async (snapshot) => {
-        if (!snapshot.empty) {
-          let paidMap: Record<string, Partial<EWasteLot>> = {};
-          try {
-            const paidRaw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
-            if (paidRaw) paidMap = JSON.parse(paidRaw);
-          } catch (e) {
-            console.warn(e);
-          }
-
-          const loadedLots: EWasteLot[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as EWasteLot;
-            const docId = docSnap.id;
-            const paidOverride = paidMap[docId.toUpperCase()] || paidMap[docId];
-            const isPaid = data.status === 'paid' || Boolean(paidOverride);
-
-            loadedLots.push({
-              ...data,
-              ...(paidOverride || {}),
-              id: docId,
-              status: isPaid ? 'paid' : (data.status || 'pending')
-            });
-          });
-
-          // Retain any locally created or paid lots that might not yet be present in the Firestore snapshot
-          setLots((prevLots) => {
-            const merged = [...loadedLots];
-            prevLots.forEach((pLot) => {
-              if (!merged.some((m) => m.id.toUpperCase() === pLot.id.toUpperCase())) {
-                merged.unshift(pLot);
-              }
-            });
-            Object.keys(paidMap).forEach((idKey) => {
-              const p = paidMap[idKey];
-              if (p && p.id && !merged.some((m) => m.id.toUpperCase() === idKey.toUpperCase())) {
-                merged.unshift(p as EWasteLot);
-              }
-            });
-            merged.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-            try {
-              localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(merged));
-            } catch (e) {
-              console.warn(e);
-            }
-            return merged;
-          });
-          setIsFirebaseSyncing(false);
-        } else if (!hasInitializedFirebase.current) {
-          // Initialize Firestore with default mock lots if remote database is blank
-          hasInitializedFirebase.current = true;
-          try {
-            const batch = writeBatch(db);
-            INITIAL_LOTS.forEach((lot) => {
-              const docRef = doc(db, 'lots', lot.id);
-              batch.set(docRef, lot, { merge: true });
-            });
-            await batch.commit();
-          } catch (err) {
-            console.warn('Firestore initial batch seed notice:', err);
-          } finally {
-            setIsFirebaseSyncing(false);
-          }
-        }
-      }, (error) => {
-        console.warn('Firestore lots listener error (falling back to local cache):', error);
-        setIsFirebaseSyncing(false);
-      });
-
-      // 2. Real-time Materials rates listener
-      const materialsCollectionRef = collection(db, 'materials');
-      unsubscribeMaterials = onSnapshot(materialsCollectionRef, async (snapshot) => {
-        if (!snapshot.empty) {
-          const loadedMats: MaterialItem[] = [];
-          snapshot.forEach((docSnap) => {
-            loadedMats.push(docSnap.data() as MaterialItem);
-          });
-          setMaterials(loadedMats);
-        } else {
-          // Seed materials to Firestore if empty
-          try {
-            const batch = writeBatch(db);
-            INITIAL_MATERIALS.forEach((mat) => {
-              const docRef = doc(db, 'materials', mat.id);
-              batch.set(docRef, mat, { merge: true });
-            });
-            await batch.commit();
-          } catch (err) {
-            console.warn('Firestore materials seed notice:', err);
-          }
-        }
-      }, (error) => {
-        console.warn('Firestore materials listener notice:', error);
-      });
-
-      // 3. Real-time Collector Profile listener
-      const collectorDocRef = doc(db, 'collectors', MOCK_COLLECTOR.id);
-      unsubscribeCollector = onSnapshot(collectorDocRef, (docSnap) => {
-        if (docSnap.exists()) {
-          setCollector(docSnap.data() as CollectorProfile);
-        } else {
-          // Seed collector profile
-          setDoc(collectorDocRef, MOCK_COLLECTOR, { merge: true }).catch(console.warn);
-        }
-      }, (error) => {
-        console.warn('Firestore collector profile listener notice:', error);
-      });
-
+      localStorage.setItem(STORAGE_KEYS.CATEGORY_REQUESTS, JSON.stringify(categoryRequests));
     } catch (e) {
-      console.warn('Firebase initialization error:', e);
-      setIsFirebaseSyncing(false);
+      console.warn('LocalStorage error:', e);
     }
+  }, [categoryRequests]);
 
-    return () => {
-      if (unsubscribeLots) unsubscribeLots();
-      if (unsubscribeMaterials) unsubscribeMaterials();
-      if (unsubscribeCollector) unsubscribeCollector();
-    };
-  }, []);
-
-  // Real-time Supabase PostgreSQL synchronization across multiple devices and browsers
+  // Real-time Supabase synchronization across all devices and browsers
   useEffect(() => {
-    let supabaseChannel: ReturnType<typeof supabase.channel> | null = null;
+    let lotsChannel: any;
 
-    try {
-      supabaseChannel = supabase
-        .channel('realtime:lots')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'lots' },
-          (payload) => {
-            if (payload.eventType === 'INSERT') {
-              const newLot = mapSupabaseRowToLot(payload.new);
-              setLots((prev) => {
-                if (prev.some((l) => l.id === newLot.id)) return prev;
-                return [newLot, ...prev];
-              });
-              playFeedbackChime('beep');
-            } else if (payload.eventType === 'UPDATE') {
-              const updated = mapSupabaseRowToLot(payload.new);
-              setLots((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
-            } else if (payload.eventType === 'DELETE') {
-              setLots((prev) => prev.filter((l) => l.id !== (payload.old as any).id));
-            }
+    const initSupabase = async () => {
+      try {
+        setIsFirebaseSyncing(true);
+
+        // 1. Fetch live lots from Supabase
+        const { data, error } = await supabase
+          .from('lots')
+          .select('*');
+
+        if (!error && data && data.length > 0) {
+          const loadedLots = data.map(supabaseRecordToLot);
+          loadedLots.sort((a, b) => parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp));
+          setLots(loadedLots);
+          hasInitializedFirebase.current = true;
+        } else if (!error && (!data || data.length === 0) && !hasInitializedFirebase.current) {
+          // If remote table is completely blank, seed initial lots to Supabase
+          hasInitializedFirebase.current = true;
+          for (const lot of INITIAL_LOTS) {
+            await supabase.from('lots').upsert(lotToSupabaseRecord(lot));
           }
-        )
-        .subscribe();
-    } catch (err) {
-      console.warn('Supabase Realtime subscription notice:', err);
-    }
+        }
+
+        // 2. Subscribe to Real-time WebSocket changes on public.lots table
+        const channel = supabase
+          .channel('public:lots-realtime')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'lots' },
+            (payload) => {
+              if (payload.eventType === 'INSERT') {
+                const newLot = supabaseRecordToLot(payload.new);
+                setLots((prev) => {
+                  if (prev.some((l) => l.id.toUpperCase() === newLot.id.toUpperCase())) {
+                    return prev.map((l) => (l.id.toUpperCase() === newLot.id.toUpperCase() ? newLot : l));
+                  }
+                  return [newLot, ...prev];
+                });
+              } else if (payload.eventType === 'UPDATE') {
+                const updatedLot = supabaseRecordToLot(payload.new);
+                setLots((prev) =>
+                  prev.map((l) => (l.id.toUpperCase() === updatedLot.id.toUpperCase() ? updatedLot : l))
+                );
+              } else if (payload.eventType === 'DELETE') {
+                const deletedId = payload.old?.id;
+                if (deletedId) {
+                  setLots((prev) => prev.filter((l) => l.id.toUpperCase() !== deletedId.toUpperCase()));
+                }
+              }
+            }
+          )
+          .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              setIsFirebaseSyncing(false);
+            }
+          });
+
+        lotsChannel = channel;
+
+        // 3. Fetch materials from Supabase
+        try {
+          const { data: matData } = await supabase.from('materials').select('*');
+          if (matData && matData.length > 0) {
+            setMaterials(matData as MaterialItem[]);
+          }
+        } catch (e) {
+          // keep local fallback
+        }
+
+        // 4. Fetch collector profile from Supabase
+        try {
+          const { data: colData } = await supabase.from('collectors').select('*').eq('id', MOCK_COLLECTOR.id).single();
+          if (colData) {
+            setCollector(colData as CollectorProfile);
+          }
+        } catch (e) {
+          // keep local fallback
+        }
+      } catch (e) {
+        console.warn('Supabase sync initialization notice (falling back to local cache):', e);
+      } finally {
+        setIsFirebaseSyncing(false);
+      }
+    };
+
+    initSupabase();
 
     return () => {
-      if (supabaseChannel) {
-        supabase.removeChannel(supabaseChannel);
+      if (lotsChannel) {
+        supabase.removeChannel(lotsChannel);
       }
     };
   }, []);
@@ -496,34 +325,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     stopVoice();
   };
 
-  const addLot = async (lotData: Omit<EWasteLot, 'id' | 'timestamp' | 'status'>): Promise<EWasteLot> => {
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+  const addLot = async (lotData: Omit<EWasteLot, 'id' | 'timestamp' | 'status'> & { id?: string }): Promise<EWasteLot> => {
+    const lotId = lotData.id || `LOT-2026-EW-${Math.floor(1000 + Math.random() * 9000)}`;
     const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    let hours = now.getHours();
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12 || 12;
-    const timeString = `${year}-${month}-${day} ${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+    const timeString = now.toLocaleDateString('en-GB') + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     const newLot: EWasteLot = {
       ...lotData,
-      id: `LOT-2026-EW-${randomSuffix}`,
+      id: lotId,
       timestamp: timeString,
       status: 'pending'
     };
 
     // Update local state immediately for snappy UI
     setLots((prev) => {
-      const next = [newLot, ...prev.filter(l => l.id.toUpperCase() !== newLot.id.toUpperCase())];
-      try {
-        localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(next));
-      } catch (e) {
-        console.warn(e);
-      }
-      return next;
+      const exists = prev.some((l) => l.id.toUpperCase() === newLot.id.toUpperCase());
+      return exists ? prev.map((l) => (l.id.toUpperCase() === newLot.id.toUpperCase() ? newLot : l)) : [newLot, ...prev];
     });
     setActiveCreatedLot(newLot);
 
@@ -534,274 +351,631 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bagsDepositedKg: Math.min(collector.targetBagsKg, Number((collector.bagsDepositedKg + (newLot.hazardFlag ? newLot.weightKg : 0)).toFixed(1)))
     };
     setCollector(updatedCollector);
-    try {
-      localStorage.setItem(STORAGE_KEYS.COLLECTOR, JSON.stringify(updatedCollector));
-    } catch (e) {
-      console.warn(e);
-    }
 
-    // Persist immediately to SQLite database backend
+    // Persist asynchronously to Supabase for cross-device sync
     try {
-      await saveLotToSqlite(newLot);
+      const record = lotToSupabaseRecord(newLot);
+      const { error } = await supabase.from('lots').upsert(record);
+      if (error) {
+        console.warn('Supabase lot upsert notice:', error.message);
+      }
+
+      // Sync collector profile in background
+      try {
+        await supabase.from('collectors').upsert({
+          id: collector.id,
+          name: collector.name,
+          phone: collector.phone,
+          today_earnings: updatedCollector.todayEarnings,
+          today_weight_kg: updatedCollector.todayWeightKg,
+          total_lots_count: updatedCollector.totalLotsCount
+        });
+      } catch {
+        // ignore if table doesn't match
+      }
     } catch (err) {
-      console.warn('SQLite lot creation save error:', err);
+      console.warn('Error saving lot to Supabase, saved to offline cache:', err);
     }
-
-    // Persist asynchronously to Firebase Firestore for cross-device sync
-    try {
-      const lotRef = doc(db, 'lots', newLot.id);
-      await setDoc(lotRef, newLot, { merge: true });
-
-      const collectorRef = doc(db, 'collectors', collector.id);
-      await setDoc(collectorRef, updatedCollector, { merge: true });
-    } catch (err) {
-      console.warn('Error saving lot to Firestore, saved to offline cache:', err);
-    }
-
-    // Persist to Supabase offline-first sync queue (Last-Write-Wins)
-    enqueueSyncAction('lots', 'insert', newLot.id, newLot);
-    enqueueSyncAction('collectors', 'update', collector.id, updatedCollector);
-    setPendingSyncCount(getSyncQueue().length);
 
     playFeedbackChime('success');
     return newLot;
   };
 
-  const approveAndPayLot = async (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH', overrideRatePerKg?: number): Promise<void> => {
-    const cleanId = (lotId || '').trim();
-    if (!cleanId) return;
-
+  const approveAndPayLot = async (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH'): Promise<void> => {
+    let updatedLot: EWasteLot | undefined;
     const nowIso = new Date().toISOString();
     const nowMs = Date.now();
     const utr = `UTR-CPCB-${nowMs.toString().slice(-8)}`;
 
-    const matchedLot = lots.find((l) => l.id.toUpperCase() === cleanId.toUpperCase());
-    const effectiveRate = (overrideRatePerKg && overrideRatePerKg > 0) 
-      ? overrideRatePerKg 
-      : (matchedLot?.ratePerKg && matchedLot.ratePerKg > 0 ? matchedLot.ratePerKg : 120);
-    const finalPayout = Math.round(weighbridgeWeightKg * effectiveRate);
+    const existingLot = lots.find((l) => l.id.toUpperCase() === lotId.toUpperCase());
+    const finalRate = existingLot ? existingLot.ratePerKg : 480;
+    const finalPayout = Math.round(weighbridgeWeightKg * finalRate);
 
-    const updatedPaidLot: EWasteLot = {
-      ...(matchedLot || {
-        id: cleanId,
-        collectorId: collector.id,
-        collectorName: collector.name,
-        materialId: 'mat_pcb_high',
-        materialName: 'High-Grade Server & Telecom Motherboard',
-        category: 'pcb',
-        weightKg: weighbridgeWeightKg,
-        ratePerKg: effectiveRate,
-        totalAmount: finalPayout,
-        timestamp: nowIso
-      }),
-      ratePerKg: effectiveRate,
-      status: 'paid',
-      weighbridgeWeightKg,
-      finalPayoutAmount: finalPayout,
-      paymentMode,
-      eprCreditKg: weighbridgeWeightKg,
-      paidAt: nowIso,
-      paidTimestamp: nowMs,
-      settlementUtr: utr,
-      anomalyFlag: false,
-      anomalyCleared: true,
-      anomalyResolution: 'Supervisor Weighbridge Clearance Override Authorized'
-    };
-
-    // 1. Immediately store in persistent PAID_LOTS map in localStorage
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
-      const map: Record<string, Partial<EWasteLot>> = raw ? JSON.parse(raw) : {};
-      map[cleanId.toUpperCase()] = updatedPaidLot;
-      map[cleanId.toLowerCase()] = updatedPaidLot;
-      map[cleanId] = updatedPaidLot;
-      localStorage.setItem(STORAGE_KEYS.PAID_LOTS, JSON.stringify(map));
-    } catch (e) {
-      console.warn('Failed to update PAID_LOTS in storage:', e);
-    }
-
-    // 2. Immediately update lots state & STORAGE_KEYS.LOTS
     setLots((prev) => {
-      let found = false;
-      const nextLots = prev.map((lot) => {
-        if (lot.id.toUpperCase() === cleanId.toUpperCase()) {
-          found = true;
-          return updatedPaidLot;
-        }
-        return lot;
-      });
-      if (!found) {
-        nextLots.unshift(updatedPaidLot);
+      const idx = prev.findIndex((l) => l.id.toUpperCase() === lotId.toUpperCase());
+      if (idx >= 0) {
+        const target = prev[idx];
+        const updated: EWasteLot = {
+          ...target,
+          status: 'paid',
+          weighbridgeWeightKg,
+          finalPayoutAmount: Math.round(weighbridgeWeightKg * target.ratePerKg),
+          paymentMode,
+          eprCreditKg: weighbridgeWeightKg,
+          paidAt: nowIso,
+          paidTimestamp: nowMs,
+          settlementUtr: utr
+        };
+        updatedLot = updated;
+        const copy = [...prev];
+        copy[idx] = updated;
+        return copy;
+      } else {
+        const newPaidLot: EWasteLot = {
+          ...(existingLot || {
+            id: lotId,
+            collectorId: 'KBD-MH-4402',
+            collectorName: 'Ram Sevak (रामसेवक कांबळे)',
+            collectorPhone: '+91 98234 56789',
+            materialId: 'mat_pcb_high',
+            materialName: 'High-Grade Server & Telecom Motherboard',
+            category: 'pcb',
+            weightKg: weighbridgeWeightKg,
+            ratePerKg: finalRate,
+            totalAmount: finalPayout,
+            timestamp: nowIso,
+            gpsLocation: '18.5204° N, 73.8567° E (Ward 12, Pune)',
+            facilityId: 'REC-MH-PN-004',
+            facilityName: 'EcoMetals CPCB Authorized Dismantling Unit #4',
+            distanceKm: 3.8,
+            hazardFlag: false,
+            photoUrl: 'https://images.unsplash.com/photo-1597733336794-12d05021d510?w=400&auto=format&fit=crop&q=80'
+          }),
+          id: lotId,
+          status: 'paid',
+          weighbridgeWeightKg,
+          finalPayoutAmount: finalPayout,
+          paymentMode,
+          eprCreditKg: weighbridgeWeightKg,
+          paidAt: nowIso,
+          paidTimestamp: nowMs,
+          settlementUtr: utr
+        };
+        updatedLot = newPaidLot;
+        return [newPaidLot, ...prev];
       }
-      try {
-        localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(nextLots));
-      } catch (e) {
-        console.warn(e);
-      }
-      return nextLots;
     });
 
-    // 3. Update collector earnings
+    const matchedLot = existingLot || updatedLot;
     let updatedCollector = collector;
     if (matchedLot && matchedLot.collectorId === collector.id) {
+      const payout = Math.round(weighbridgeWeightKg * matchedLot.ratePerKg);
       updatedCollector = {
         ...collector,
-        todayEarnings: collector.todayEarnings + finalPayout
+        todayEarnings: collector.todayEarnings + payout
       };
       setCollector(updatedCollector);
-      try {
-        localStorage.setItem(STORAGE_KEYS.COLLECTOR, JSON.stringify(updatedCollector));
-      } catch (e) {
-        console.warn(e);
-      }
     }
 
-    // 4. Save to Firestore using setDoc with merge: true (never fails with document not found)
+    // Persist to Supabase
     try {
-      const lotRef = doc(db, 'lots', cleanId);
-      await setDoc(lotRef, updatedPaidLot, { merge: true });
-
+      if (updatedLot) {
+        await supabase.from('lots').upsert(lotToSupabaseRecord(updatedLot));
+      }
       if (matchedLot && matchedLot.collectorId === collector.id) {
-        const collectorRef = doc(db, 'collectors', collector.id);
-        await setDoc(collectorRef, { todayEarnings: updatedCollector.todayEarnings }, { merge: true });
+        await supabase.from('collectors').upsert({
+          id: collector.id,
+          today_earnings: updatedCollector.todayEarnings
+        });
       }
     } catch (err) {
-      console.warn('Firestore update error, cached locally:', err);
+      console.warn('Supabase update notice, cached locally:', err);
     }
-
-    // 5. Save to SQLite database backend
-    try {
-      await updateLotInSqlite(cleanId, updatedPaidLot);
-    } catch (err) {
-      console.warn('SQLite lot payment update error:', err);
-    }
-
-    // 6. Offline sync queue
-    enqueueSyncAction('lots', 'update', cleanId, updatedPaidLot);
-    enqueueSyncAction('transactions', 'insert', `TXN-${cleanId}`, {
-      id: `TXN-${cleanId}`,
-      lot_id: cleanId,
-      collector_id: matchedLot?.collectorId || collector.id,
-      weighbridge_weight_kg: weighbridgeWeightKg,
-      rate_per_kg: effectiveRate,
-      payout_amount: finalPayout,
-      payment_mode: paymentMode,
-      payment_status: 'completed',
-      epr_credit_generated_kg: weighbridgeWeightKg,
-    });
-    enqueueSyncAction('collectors', 'update', collector.id, updatedCollector);
-    setPendingSyncCount(getSyncQueue().length);
 
     playFeedbackChime('success');
   };
 
   const rejectLot = async (lotId: string, reason: string): Promise<void> => {
-    const cleanId = (lotId || '').trim();
-    let updatedLot: EWasteLot | undefined;
-
-    setLots((prev) => {
-      const nextLots = prev.map((lot) => {
-        if (lot.id.toUpperCase() === cleanId.toUpperCase()) {
-          updatedLot = {
-            ...lot,
-            status: 'rejected',
-            anomalyFlag: true,
-            anomalyReason: reason,
-            rejectionReason: reason
-          };
-          return updatedLot;
-        }
-        return lot;
-      });
-      try {
-        localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(nextLots));
-      } catch (e) {
-        console.warn(e);
-      }
-      return nextLots;
-    });
-
-    // Remove from PAID_LOTS cache if present
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
-      if (raw) {
-        const map = JSON.parse(raw);
-        delete map[cleanId];
-        delete map[cleanId.toUpperCase()];
-        delete map[cleanId.toLowerCase()];
-        localStorage.setItem(STORAGE_KEYS.PAID_LOTS, JSON.stringify(map));
-      }
-    } catch (e) {
-      console.warn('Failed to clear PAID_LOTS on reject:', e);
-    }
-
-    // Save to SQLite
-    if (updatedLot) {
-      try {
-        await updateLotInSqlite(cleanId, updatedLot);
-      } catch (sqlErr) {
-        console.warn('SQLite rejectLot error:', sqlErr);
-      }
-    }
-
-    // Save to Firestore with setDoc merge: true
-    try {
-      const lotRef = doc(db, 'lots', cleanId);
-      if (updatedLot) {
-        await setDoc(lotRef, updatedLot, { merge: true });
-      } else {
-        await setDoc(lotRef, {
-          id: cleanId,
-          status: 'rejected',
-          anomalyFlag: true,
-          anomalyReason: reason,
-          rejectionReason: reason
-        }, { merge: true });
-      }
-    } catch (err) {
-      console.warn('Firestore rejectLot error, cached locally:', err);
-    }
-
-    if (updatedLot) {
-      enqueueSyncAction('lots', 'update', cleanId, updatedLot);
-      setPendingSyncCount(getSyncQueue().length);
-    }
-
-    playFeedbackChime('warning');
-  };
-
-  const reopenLot = async (lotId: string): Promise<void> => {
-    let updatedLot: EWasteLot | undefined;
+    let updatedRejectedLot: EWasteLot | undefined;
     setLots((prev) =>
       prev.map((lot) => {
         if (lot.id === lotId) {
-          updatedLot = {
+          updatedRejectedLot = {
             ...lot,
-            status: 'pending',
-            anomalyFlag: true
+            status: 'rejected',
+            anomalyFlag: true,
+            anomalyReason: reason
           };
-          return updatedLot;
+          return updatedRejectedLot;
         }
         return lot;
       })
     );
 
     try {
-      const lotRef = doc(db, 'lots', lotId);
-      await updateDoc(lotRef, {
-        status: 'pending',
-        anomalyFlag: true
-      });
+      if (updatedRejectedLot) {
+        await supabase.from('lots').upsert(lotToSupabaseRecord(updatedRejectedLot));
+      } else {
+        await supabase.from('lots').update({
+          status: 'rejected',
+          anomaly_flag: true,
+          anomaly_reason: reason
+        }).eq('id', lotId);
+      }
     } catch (err) {
-      console.warn('Firestore reopenLot error, cached locally:', err);
+      console.warn('Supabase rejectLot notice, cached locally:', err);
     }
 
-    if (updatedLot) {
-      enqueueSyncAction('lots', 'update', lotId, updatedLot);
-      setPendingSyncCount(getSyncQueue().length);
+    playFeedbackChime('warning');
+  };
+
+  const requestNewCategory = async (reqData: Omit<CategoryApprovalRequest, 'id' | 'timestamp' | 'status'>): Promise<CategoryApprovalRequest> => {
+    const newReqId = `CAT-REQ-2026-${Math.floor(100 + Math.random() * 900)}`;
+    const nowStr = new Date().toLocaleString('en-IN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    const newRequest: CategoryApprovalRequest = {
+      ...reqData,
+      id: newReqId,
+      status: 'pending',
+      timestamp: nowStr
+    };
+
+    setCategoryRequests((prev) => [newRequest, ...prev]);
+
+    // If associated with a lotId, mark that lot as pending category approval with price decided later (0)
+    if (reqData.lotId) {
+      setLots((prev) =>
+        prev.map((lot) => {
+          if (lot.id === reqData.lotId) {
+            return {
+              ...lot,
+              isOutOfCategory: true,
+              isPendingCategoryApproval: true,
+              requestedCategoryName: reqData.categoryName,
+              ratePerKg: 0,
+              totalAmount: 0
+            };
+          }
+          return lot;
+        })
+      );
+    }
+
+    try {
+      await supabase.from('category_requests').upsert({
+        id: newReqId,
+        category_name: newRequest.categoryName,
+        collector_name: newRequest.collectorName,
+        collector_phone: newRequest.collectorPhone,
+        description: newRequest.description,
+        estimated_weight_kg: newRequest.estimatedWeightKg,
+        photo_url: newRequest.photoUrl,
+        lot_id: newRequest.lotId,
+        status: newRequest.status,
+        timestamp: newRequest.timestamp
+      });
+
+      if (reqData.lotId) {
+        await supabase.from('lots').update({
+          is_out_of_category: true,
+          is_pending_category_approval: true,
+          requested_category_name: reqData.categoryName,
+          rate_per_kg: 0,
+          total_amount: 0
+        }).eq('id', reqData.lotId);
+      }
+    } catch (err) {
+      console.warn('Supabase requestNewCategory error:', err);
+    }
+
+    playFeedbackChime('success');
+    return newRequest;
+  };
+
+  const approveCategoryRequest = async (
+    requestId: string,
+    approvedRatePerKg: number,
+    assignedStandardCategory: string,
+    reviewNotes: string = 'Approved by CPCB Environmental Officer. Live Mandi tariff instituted.',
+    reviewedBy: string = 'CPCB Senior Environmental Audit Officer'
+  ): Promise<void> => {
+    let targetReq: CategoryApprovalRequest | undefined;
+
+    setCategoryRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === requestId) {
+          targetReq = {
+            ...r,
+            status: 'approved',
+            approvedRatePerKg,
+            assignedStandardCategory,
+            reviewNotes,
+            reviewedBy
+          };
+          return targetReq;
+        }
+        return r;
+      })
+    );
+
+    // If request found, create a new Material item so it appears on the live Mandi board
+    if (targetReq) {
+      const newMaterialId = `mat_appr_${Date.now()}`;
+      const newMaterial: MaterialItem = {
+        id: newMaterialId,
+        name_en: targetReq.categoryName,
+        name_hi: targetReq.categoryName,
+        name_mr: targetReq.categoryName,
+        grade: `CPCB Approved (${assignedStandardCategory.toUpperCase()})`,
+        pricePerKg: approvedRatePerKg,
+        trend: 1.5,
+        category: assignedStandardCategory,
+        hazardLevel: 'safe',
+        audioText_en: `${targetReq.categoryName} approved by CPCB at ₹${approvedRatePerKg} per kg`,
+        audioText_hi: `${targetReq.categoryName} सीपीसीबी द्वारा ₹${approvedRatePerKg} प्रति किलो पर स्वीकृत`,
+        audioText_mr: `${targetReq.categoryName} CPCB द्वारे ₹${approvedRatePerKg} प्रति किलो मंजूर`,
+        crmYield: { copperPct: 12, lithiumPct: 1, cobaltPct: 0.5, neodymiumPct: 0.5, goldGramsPerTon: 50 }
+      };
+
+      await addCustomMaterial(newMaterial);
+
+      // Also update any pending lot linked to this request or with matching requestedCategoryName
+      setLots((prev) =>
+        prev.map((lot) => {
+          if (
+            (targetReq?.lotId && lot.id === targetReq.lotId) ||
+            lot.requestedCategoryName?.toLowerCase() === targetReq?.categoryName.toLowerCase() ||
+            lot.materialName.toLowerCase() === targetReq?.categoryName.toLowerCase()
+          ) {
+            const finalTotal = Math.round(lot.weightKg * approvedRatePerKg);
+            return {
+              ...lot,
+              materialId: newMaterialId,
+              materialName: targetReq.categoryName,
+              category: assignedStandardCategory,
+              ratePerKg: approvedRatePerKg,
+              totalAmount: finalTotal,
+              isPendingCategoryApproval: false,
+              isOutOfCategory: false
+            };
+          }
+          return lot;
+        })
+      );
+
+      try {
+        await supabase.from('category_requests').update({
+          status: 'approved',
+          approved_rate_per_kg: approvedRatePerKg,
+          assigned_standard_category: assignedStandardCategory,
+          review_notes: reviewNotes,
+          reviewed_by: reviewedBy
+        }).eq('id', requestId);
+
+        if (targetReq.lotId) {
+          await supabase.from('lots').update({
+            rate_per_kg: approvedRatePerKg,
+            category: assignedStandardCategory,
+            is_pending_category_approval: false,
+            is_out_of_category: false
+          }).eq('id', targetReq.lotId);
+        }
+      } catch (err) {
+        console.warn('Supabase approveCategoryRequest notice:', err);
+      }
+    }
+
+    playFeedbackChime('success');
+  };
+
+  const rejectCategoryRequest = async (
+    requestId: string,
+    rejectionReason: string,
+    reviewedBy: string = 'CPCB Senior Environmental Audit Officer'
+  ): Promise<void> => {
+    let targetReq: CategoryApprovalRequest | undefined;
+
+    setCategoryRequests((prev) =>
+      prev.map((r) => {
+        if (r.id === requestId) {
+          targetReq = {
+            ...r,
+            status: 'rejected',
+            rejectionReason,
+            reviewedBy
+          };
+          return targetReq;
+        }
+        return r;
+      })
+    );
+
+    if (targetReq?.lotId) {
+      setLots((prev) =>
+        prev.map((lot) => {
+          if (lot.id === targetReq?.lotId) {
+            return {
+              ...lot,
+              status: 'rejected',
+              anomalyFlag: true,
+              anomalyReason: `Category rejected by CPCB Authority: ${rejectionReason}`
+            };
+          }
+          return lot;
+        })
+      );
+    }
+
+    try {
+      await supabase.from('category_requests').update({
+        status: 'rejected',
+        rejection_reason: rejectionReason,
+        reviewed_by: reviewedBy
+      }).eq('id', requestId);
+
+      if (targetReq?.lotId) {
+        await supabase.from('lots').update({
+          status: 'rejected',
+          anomaly_flag: true,
+          anomaly_reason: `Category rejected by CPCB Authority: ${rejectionReason}`
+        }).eq('id', targetReq.lotId);
+      }
+    } catch (err) {
+      console.warn('Supabase rejectCategoryRequest notice:', err);
+    }
+
+    playFeedbackChime('warning');
+  };
+
+  const reopenLot = async (lotId: string): Promise<void> => {
+    setLots((prev) =>
+      prev.map((lot) => {
+        if (lot.id === lotId) {
+          return {
+            ...lot,
+            status: 'pending',
+            anomalyFlag: true
+          };
+        }
+        return lot;
+      })
+    );
+
+    try {
+      await supabase.from('lots').update({
+        status: 'pending',
+        anomaly_flag: true
+      }).eq('id', lotId);
+    } catch (err) {
+      console.warn('Supabase reopenLot notice, cached locally:', err);
     }
 
     playFeedbackChime('beep');
+  };
+
+  const overrideAnomalyLot = async (lotId: string): Promise<void> => {
+    let updatedAnomalyLot: EWasteLot | undefined;
+    setLots((prev) =>
+      prev.map((lot) => {
+        if (lot.id === lotId) {
+          const verifiedMass = lot.weighbridgeWeightKg || lot.weightKg;
+          updatedAnomalyLot = {
+            ...lot,
+            anomalyCleared: true,
+            anomalyFlag: false,
+            anomalyResolution: 'SUPERVISOR_OVERRIDE',
+            status: 'paid',
+            weighbridgeWeightKg: verifiedMass,
+            finalPayoutAmount: verifiedMass * lot.ratePerKg,
+            settlementUtr: lot.settlementUtr || `UPI-OVERRIDE-${Date.now().toString().slice(-6)}`
+          };
+          return updatedAnomalyLot;
+        }
+        return lot;
+      })
+    );
+
+    try {
+      if (updatedAnomalyLot) {
+        await supabase.from('lots').upsert(lotToSupabaseRecord(updatedAnomalyLot));
+      } else {
+        await supabase.from('lots').update({
+          anomaly_flag: false,
+          status: 'paid',
+          settlement_utr: `UPI-OVERRIDE-${Date.now().toString().slice(-6)}`
+        }).eq('id', lotId);
+      }
+    } catch (err) {
+      console.warn('Supabase overrideAnomalyLot notice:', err);
+    }
+    playFeedbackChime('success');
+  };
+
+  const rejectAnomalyLot = async (lotId: string, reason: string): Promise<void> => {
+    let updatedRejectedLot: EWasteLot | undefined;
+    setLots((prev) =>
+      prev.map((lot) => {
+        if (lot.id === lotId) {
+          updatedRejectedLot = {
+            ...lot,
+            status: 'rejected',
+            anomalyFlag: true,
+            anomalyCleared: false,
+            anomalyReason: reason,
+            anomalyResolution: 'REJECTED_QUARANTINED'
+          };
+          return updatedRejectedLot;
+        }
+        return lot;
+      })
+    );
+
+    try {
+      if (updatedRejectedLot) {
+        await supabase.from('lots').upsert(lotToSupabaseRecord(updatedRejectedLot));
+      } else {
+        await supabase.from('lots').update({
+          status: 'rejected',
+          anomaly_flag: true,
+          anomaly_reason: reason
+        }).eq('id', lotId);
+      }
+    } catch (err) {
+      console.warn('Supabase rejectAnomalyLot notice:', err);
+    }
+    playFeedbackChime('warning');
+  };
+
+  const deleteLotWithKey = async (lotId: string, adminKey: string): Promise<boolean> => {
+    if (adminKey.trim() !== '12345678') {
+      return false;
+    }
+
+    setLots((prev) => prev.filter((l) => l.id !== lotId));
+
+    try {
+      await supabase.from('lots').delete().eq('id', lotId);
+    } catch (err) {
+      console.warn('Supabase deleteLotWithKey notice:', err);
+    }
+
+    playFeedbackChime('beep');
+    return true;
+  };
+
+  const registerPartner = async (partnerData: Omit<PartnerRegistration, 'id' | 'appliedDate' | 'status'>): Promise<PartnerRegistration> => {
+    const regId = `REG-PARTNER-2026-${Math.floor(100 + Math.random() * 900)}`;
+    const nowStr = new Date().toLocaleString('en-IN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    const newReg: PartnerRegistration = {
+      ...partnerData,
+      id: regId,
+      status: 'PENDING_GOVT_APPROVAL',
+      appliedDate: nowStr
+    };
+
+    setPartnerRegistrations((prev) => {
+      const updated = [newReg, ...prev];
+      try {
+        localStorage.setItem('ekabad_partner_regs_v1', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage error:', e);
+      }
+      return updated;
+    });
+
+    try {
+      await supabase.from('partner_registrations').upsert({
+        id: regId,
+        name: newReg.name,
+        phone: newReg.phone,
+        city: newReg.city,
+        state: newReg.state,
+        ward: newReg.ward,
+        bank_upi: newReg.bankUpi,
+        tier: newReg.tier,
+        facility_name: newReg.facilityName,
+        company_name: newReg.companyName,
+        applied_date: newReg.appliedDate,
+        status: newReg.status,
+        registered_by_authority_id: newReg.registeredByAuthorityId
+      });
+    } catch (err) {
+      console.warn('Supabase partner registration notice:', err);
+    }
+
+    playFeedbackChime('success');
+    return newReg;
+  };
+
+  const approvePartner = async (registrationId: string, officerName: string): Promise<void> => {
+    const cpcbId = `CPCB-SAF-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const nowStr = new Date().toLocaleString('en-IN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    setPartnerRegistrations((prev) => {
+      const updated = prev.map((r) => {
+        if (r.id === registrationId) {
+          return {
+            ...r,
+            status: 'APPROVED' as const,
+            approvedDate: nowStr,
+            approvedBy: officerName,
+            assignedCpcbPartnerId: cpcbId
+          };
+        }
+        return r;
+      });
+      try {
+        localStorage.setItem('ekabad_partner_regs_v1', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage error:', e);
+      }
+      return updated;
+    });
+
+    try {
+      await supabase.from('partner_registrations').update({
+        status: 'APPROVED',
+        approved_date: nowStr,
+        approved_by: officerName,
+        assigned_cpcb_partner_id: cpcbId
+      }).eq('id', registrationId);
+    } catch (err) {
+      console.warn('Supabase approvePartner error:', err);
+    }
+    playFeedbackChime('success');
+  };
+
+  const rejectPartner = async (registrationId: string, reason: string): Promise<void> => {
+    setPartnerRegistrations((prev) => {
+      const updated = prev.map((r) => {
+        if (r.id === registrationId) {
+          return {
+            ...r,
+            status: 'REJECTED' as const,
+            rejectionReason: reason
+          };
+        }
+        return r;
+      });
+      try {
+        localStorage.setItem('ekabad_partner_regs_v1', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage error:', e);
+      }
+      return updated;
+    });
+
+    try {
+      await supabase.from('partner_registrations').update({
+        status: 'REJECTED',
+        rejection_reason: reason
+      }).eq('id', registrationId);
+    } catch (err) {
+      console.warn('Supabase rejectPartner error:', err);
+    }
+    playFeedbackChime('warning');
   };
 
   const syncPendingAiClassifications = async (): Promise<void> => {
@@ -845,22 +1019,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             setLots((prev) => prev.map((l) => (l.id === lot.id ? updatedLot : l)));
 
-            // Update in Firestore
+            // Update in Supabase
             try {
-              const lotRef = doc(db, 'lots', lot.id);
-              await updateDoc(lotRef, {
-                materialName: updatedLot.materialName,
-                ratePerKg: updatedLot.ratePerKg,
-                totalAmount: updatedLot.totalAmount,
-                hazardFlag: updatedLot.hazardFlag,
-                hazardNote: updatedLot.hazardNote || null,
-                needsOnlineAiCategorization: false,
-                anomalyFlag: updatedLot.anomalyFlag || false,
-                anomalyReason: updatedLot.anomalyReason || null,
+              await supabase.from('lots').update({
+                material_name: updatedLot.materialName,
+                rate_per_kg: updatedLot.ratePerKg,
+                total_amount: updatedLot.totalAmount,
+                hazard_flag: updatedLot.hazardFlag,
+                hazard_note: updatedLot.hazardNote || null,
+                needs_online_ai_categorization: false,
+                anomaly_flag: updatedLot.anomalyFlag || false,
+                anomaly_reason: updatedLot.anomalyReason || null,
                 status: updatedLot.status
-              });
-            } catch (fsErr) {
-              console.warn('Firestore queue sync error:', fsErr);
+              }).eq('id', lot.id);
+            } catch (sbErr) {
+              console.warn('Supabase queue sync error:', sbErr);
             }
           }
         } catch (itemErr) {
@@ -903,16 +1076,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       if (updatedMat) {
-        const matRef = doc(db, 'materials', materialId);
-        await setDoc(matRef, updatedMat, { merge: true });
+        await supabase.from('materials').upsert(updatedMat);
       }
     } catch (err) {
-      console.warn('Firestore updateMaterialPrice error:', err);
-    }
-
-    if (updatedMat) {
-      enqueueSyncAction('materials', 'update', materialId, updatedMat);
-      setPendingSyncCount(getSyncQueue().length);
+      console.warn('Supabase updateMaterialPrice notice:', err);
     }
 
     playFeedbackChime('beep');
@@ -928,14 +1095,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      const matRef = doc(db, 'materials', newMat.id);
-      await setDoc(matRef, newMat, { merge: true });
+      await supabase.from('materials').upsert(newMat);
     } catch (err) {
-      console.warn('Firestore addCustomMaterial error:', err);
+      console.warn('Supabase addCustomMaterial notice:', err);
     }
-
-    enqueueSyncAction('materials', 'upsert', newMat.id, newMat);
-    setPendingSyncCount(getSyncQueue().length);
 
     playFeedbackChime('success');
   };
@@ -951,101 +1114,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsOnline(true);
 
     try {
-      const batch = writeBatch(db);
-      INITIAL_LOTS.forEach((lot) => {
-        const docRef = doc(db, 'lots', lot.id);
-        batch.set(docRef, lot);
+      for (const lot of INITIAL_LOTS) {
+        await supabase.from('lots').upsert(lotToSupabaseRecord(lot));
+      }
+      for (const mat of INITIAL_MATERIALS) {
+        await supabase.from('materials').upsert(mat);
+      }
+      await supabase.from('collectors').upsert({
+        id: MOCK_COLLECTOR.id,
+        name: MOCK_COLLECTOR.name,
+        phone: MOCK_COLLECTOR.phone,
+        today_earnings: MOCK_COLLECTOR.todayEarnings,
+        today_weight_kg: MOCK_COLLECTOR.todayWeightKg,
+        total_lots_count: MOCK_COLLECTOR.totalLotsCount
       });
-      INITIAL_MATERIALS.forEach((mat) => {
-        const docRef = doc(db, 'materials', mat.id);
-        batch.set(docRef, mat);
-      });
-      const colRef = doc(db, 'collectors', MOCK_COLLECTOR.id);
-      batch.set(colRef, MOCK_COLLECTOR);
-      await batch.commit();
     } catch (err) {
-      console.warn('Firestore resetAllData notice:', err);
+      console.warn('Supabase resetAllData notice:', err);
     }
 
     playFeedbackChime('beep');
-  };
-
-  const login = (role: UserRole, userDetails?: any) => {
-    const session: AuthSession = {
-      isLoggedIn: true,
-      role,
-      user: userDetails || {
-        id: role === 'collector' ? collector.id : role === 'recycler' ? recycler.id : 'GOV-CPCB-OFFICER',
-        name: role === 'collector' ? collector.name : role === 'recycler' ? recycler.name : 'CPCB Central Desk'
-      },
-      loginTime: Date.now()
-    };
-    setAuthSession(session);
-    try {
-      localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(session));
-      localStorage.setItem(STORAGE_KEYS.VIEW, role);
-    } catch (e) {
-      console.warn('LocalStorage auth session save notice:', e);
-    }
-    setCurrentView(role);
-    playFeedbackChime('success');
-  };
-
-  const logout = () => {
-    setAuthSession(null);
-    try {
-      localStorage.removeItem(STORAGE_KEYS.AUTH_SESSION);
-      localStorage.setItem(STORAGE_KEYS.VIEW, 'gateway');
-    } catch (e) {
-      console.warn('LocalStorage auth session clear notice:', e);
-    }
-    setCurrentView('gateway');
-    playFeedbackChime('beep');
-  };
-
-  const deleteLotWithKey = async (lotId: string, adminKey: string): Promise<boolean> => {
-    if (adminKey.trim() !== '12345678') {
-      return false;
-    }
-
-    setLots((prev) => prev.filter((l) => l.id !== lotId));
-
-    try {
-      const lotRef = doc(db, 'lots', lotId);
-      await deleteDoc(lotRef);
-    } catch (e) {
-      console.warn('Firestore deleteLot notice:', e);
-    }
-
-    try {
-      enqueueSyncAction('lots', 'delete', lotId, { id: lotId });
-      setPendingSyncCount(getSyncQueue().length);
-    } catch (e) {
-      console.warn('Sync queue delete notice:', e);
-    }
-
-    return true;
-  };
-
-  const restoreLot = async (lot: EWasteLot): Promise<void> => {
-    setLots((prev) => {
-      const exists = prev.some((l) => l.id === lot.id);
-      return exists ? prev : [lot, ...prev];
-    });
-
-    try {
-      const lotRef = doc(db, 'lots', lot.id);
-      await setDoc(lotRef, lot, { merge: true });
-    } catch (e) {
-      console.warn('Firestore restoreLot notice:', e);
-    }
-
-    try {
-      enqueueSyncAction('lots', 'insert', lot.id, lot);
-      setPendingSyncCount(getSyncQueue().length);
-    } catch (e) {
-      console.warn('Sync queue restore notice:', e);
-    }
   };
 
   return (
@@ -1053,9 +1140,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         currentView,
         setCurrentView,
-        authSession,
-        login,
-        logout,
         language,
         setLanguage,
         isOnline,
@@ -1065,6 +1149,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recycler,
         materials,
         lots,
+        categoryRequests,
+        partnerRegistrations,
         activeCreatedLot,
         setActiveCreatedLot,
         activePublicOrderId,
@@ -1072,20 +1158,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addLot,
         approveAndPayLot,
         rejectLot,
+        overrideAnomalyLot,
+        rejectAnomalyLot,
+        deleteLotWithKey,
         reopenLot,
+        registerPartner,
+        approvePartner,
+        rejectPartner,
+        requestNewCategory,
+        approveCategoryRequest,
+        rejectCategoryRequest,
         updateMaterialPrice,
         addCustomMaterial,
         syncPendingAiClassifications,
         isSyncingOfflineQueue,
         resetAllData,
-        deleteLotWithKey,
-        restoreLot,
         speak,
         stopAudio,
-        isFirebaseSyncing,
-        isSupabaseSyncing,
-        pendingSyncCount,
-        triggerSupabaseSync
+        isFirebaseSyncing
       }}
     >
       {children}

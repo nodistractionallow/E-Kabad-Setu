@@ -8,8 +8,7 @@ export const VERCEL_BASE_URL = `https://${VERCEL_DOMAIN}`;
 
 export function getTrackingUrl(lotId: string): string {
   const cleanLotId = encodeURIComponent((lotId || '').trim());
-  const origin = (typeof window !== 'undefined' && window.location.origin) ? window.location.origin : VERCEL_BASE_URL;
-  return `${origin}/?orderId=${cleanLotId}&view=order_status`;
+  return `${VERCEL_BASE_URL}/?orderId=${cleanLotId}&view=order_status`;
 }
 
 // Aliases for compatibility

@@ -2,8 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { EWasteLot, MaterialItem } from '../types';
 import { playFeedbackChime } from '../utils/speech';
+import { parseDateTimeToMs, getSearchableDateString } from '../utils/dateTime';
 import { TablePagination } from './TablePagination';
-import { parseDateTimeToMs } from '../utils/dateTime';
+import { AuthorityQrScannerModal } from './AuthorityQrScannerModal';
 import { 
   Factory, 
   ShieldCheck, 
@@ -54,9 +55,9 @@ export const RecyclerErpDashboard: React.FC = () => {
     rejectLot, 
     reopenLot, 
     updateMaterialPrice, 
-    setCurrentView,
-    logout,
-    speak 
+    setCurrentView, 
+    speak,
+    setActivePublicOrderId
   } = useApp();
 
   // Active ERP Tab (Economics, Datasets, Research moved strictly to Government Portal)
@@ -129,6 +130,7 @@ export const RecyclerErpDashboard: React.FC = () => {
   const [verifyingLot, setVerifyingLot] = useState<EWasteLot | null>(null);
   const [weighbridgeInput, setWeighbridgeInput] = useState<number>(0);
   const [selectedPaymentMode, setSelectedPaymentMode] = useState<'UPI' | 'CASH'>('UPI');
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
   
   // Tab 1: Pending vs Paid Tab State
   const [inboundTab, setInboundTab] = useState<'pending' | 'paid'>('pending');
@@ -196,12 +198,7 @@ export const RecyclerErpDashboard: React.FC = () => {
   } | null>(null);
 
   const pendingLots = lots.filter((l) => l.status === 'pending');
-  const flaggedAnomalyLots = lots.filter((l) => 
-    l.status !== 'rejected' && 
-    l.status !== 'paid' && 
-    !l.anomalyCleared && 
-    Boolean(l.anomalyFlag || (l.ratePerKg > 900 && !l.anomalyCleared) || (l.category === 'pcb' && l.weightKg > 50 && !l.anomalyCleared))
-  );
+  const flaggedAnomalyLots = lots.filter((l) => l.status !== 'rejected' && (l.anomalyFlag || l.ratePerKg > 900 || (l.category === 'pcb' && l.weightKg > 50)));
   const rejectedLots = lots.filter((l) => l.status === 'rejected');
   const verifiedLots = lots.filter((l) => l.status === 'paid' || l.status === 'verified');
 
@@ -218,11 +215,14 @@ export const RecyclerErpDashboard: React.FC = () => {
   // 1. Pending Queue Table Filtering, Sorting & Pagination
   const filteredPendingLots = useMemo(() => {
     return pendingLots.filter((lot) => {
+      const dateStr = getSearchableDateString(lot.timestamp).toLowerCase();
       const matchSearch = pendingSearch === '' || 
         lot.id.toLowerCase().includes(pendingSearch.toLowerCase()) ||
         lot.collectorName.toLowerCase().includes(pendingSearch.toLowerCase()) ||
         lot.collectorId.toLowerCase().includes(pendingSearch.toLowerCase()) ||
-        lot.materialName.toLowerCase().includes(pendingSearch.toLowerCase());
+        lot.materialName.toLowerCase().includes(pendingSearch.toLowerCase()) ||
+        (lot.facilityName && lot.facilityName.toLowerCase().includes(pendingSearch.toLowerCase())) ||
+        dateStr.includes(pendingSearch.toLowerCase());
       const matchCat = pendingCategory === 'ALL' || lot.category.toLowerCase() === pendingCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
@@ -245,17 +245,29 @@ export const RecyclerErpDashboard: React.FC = () => {
   // 2. Verified & Paid Table Filtering, Sorting & Pagination
   const filteredPaidLots = useMemo(() => {
     return verifiedLots.filter((lot) => {
+      const dateStr = getSearchableDateString(lot.paidAt || lot.timestamp).toLowerCase();
       const matchSearch = paidSearch === '' ||
         lot.id.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.collectorName.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.collectorId.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.materialName.toLowerCase().includes(paidSearch.toLowerCase()) ||
+        (lot.facilityName && lot.facilityName.toLowerCase().includes(paidSearch.toLowerCase())) ||
+        (lot.settlementUtr && lot.settlementUtr.toLowerCase().includes(paidSearch.toLowerCase())) ||
+        dateStr.includes(paidSearch.toLowerCase()) ||
         (lot.paymentMode && lot.paymentMode.toLowerCase().includes(paidSearch.toLowerCase()));
       const matchCat = paidCategory === 'ALL' || lot.category.toLowerCase() === paidCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (paidSort === 'date_desc') return parseDateTimeToMs(b.paidAt || b.timestamp) - parseDateTimeToMs(a.paidAt || a.timestamp);
-      if (paidSort === 'date_asc') return parseDateTimeToMs(a.paidAt || a.timestamp) - parseDateTimeToMs(b.paidAt || b.timestamp);
+      if (paidSort === 'date_desc') {
+        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.timestamp);
+        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.timestamp);
+        return timeB - timeA;
+      }
+      if (paidSort === 'date_asc') {
+        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.timestamp);
+        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.timestamp);
+        return timeA - timeB;
+      }
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (paidSort === 'mass_desc') return massB - massA;
@@ -358,8 +370,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = selectedVendorCategory === 'ALL' || lot.category.toLowerCase() === selectedVendorCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (selectedVendorSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (selectedVendorSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (selectedVendorSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (selectedVendorSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (selectedVendorSort === 'mass_desc') return massB - massA;
@@ -394,8 +406,8 @@ export const RecyclerErpDashboard: React.FC = () => {
         const scoreB = liveAnomalyResults[b.id]?.anomalyScore ?? (b.anomalyFlag ? 88 : 60);
         return scoreB - scoreA;
       }
-      if (anomalySort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (anomalySort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (anomalySort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (anomalySort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       if (anomalySort === 'mass_desc') return b.weightKg - a.weightKg;
       if (anomalySort === 'amount_desc') return b.totalAmount - a.totalAmount;
       return 0;
@@ -420,8 +432,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = rejectedCategory === 'ALL' || lot.category.toLowerCase() === rejectedCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (rejectedSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (rejectedSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (rejectedSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (rejectedSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       if (rejectedSort === 'mass_desc') return b.weightKg - a.weightKg;
       if (rejectedSort === 'amount_desc') return b.totalAmount - a.totalAmount;
       return 0;
@@ -444,7 +456,7 @@ export const RecyclerErpDashboard: React.FC = () => {
         lot.category.toLowerCase().includes(q) ||
         lot.materialName.toLowerCase().includes(q);
     }).sort((a, b) => {
-      if (eprSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      if (eprSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (eprSort === 'mass_desc') return massB - massA;
@@ -461,23 +473,6 @@ export const RecyclerErpDashboard: React.FC = () => {
     return filteredEprLots.slice(start, start + PAGE_SIZE);
   }, [filteredEprLots, eprPage]);
 
-  const [isOverridingId, setIsOverridingId] = useState<string | null>(null);
-
-  const handleOverrideAnomalyAndPay = async (lot: EWasteLot) => {
-    try {
-      setIsOverridingId(lot.id);
-      playFeedbackChime('success');
-      const weight = lot.weighbridgeWeightKg || lot.weightKg || 5.0;
-      const rate = (lot.ratePerKg && lot.ratePerKg > 0) ? lot.ratePerKg : 120;
-      await approveAndPayLot(lot.id, weight, 'UPI', rate);
-      speak(`Lot ${lot.id} supervisor override approved. Payment completed and anomaly cleared.`);
-    } catch (e) {
-      console.error('Error overriding anomaly:', e);
-    } finally {
-      setIsOverridingId(null);
-    }
-  };
-
   const openWeighbridgeModal = (lot: EWasteLot) => {
     playFeedbackChime('beep');
     setVerifyingLot(lot);
@@ -490,31 +485,6 @@ export const RecyclerErpDashboard: React.FC = () => {
     approveAndPayLot(verifyingLot.id, weighbridgeInput, selectedPaymentMode);
     setVerifyingLot(null);
     speak(`Lot ${verifyingLot.id} verified at weighbridge. Payment released via ${selectedPaymentMode}.`);
-  };
-
-  // Recycler Consignment Decline / Reject Modal State
-  const [decliningLot, setDecliningLot] = useState<EWasteLot | null>(null);
-  const [declineReason, setDeclineReason] = useState<string>('Contaminated scrap / Non-compliant material detected at facility gate');
-  const [isDeclineSubmitting, setIsDeclineSubmitting] = useState(false);
-
-  const openRecyclerDeclineModal = (lot: EWasteLot) => {
-    playFeedbackChime('warning');
-    setDecliningLot(lot);
-    setDeclineReason('Contaminated scrap / Non-compliant material detected at facility gate');
-  };
-
-  const handleConfirmDecline = async () => {
-    if (!decliningLot) return;
-    setIsDeclineSubmitting(true);
-    try {
-      await rejectLot(decliningLot.id, declineReason.trim());
-      speak(`Consignment ${decliningLot.id} declined and quarantined. Status synchronized across database.`);
-      setDecliningLot(null);
-    } catch (err) {
-      console.error('Recycler decline error:', err);
-    } finally {
-      setIsDeclineSubmitting(false);
-    }
   };
 
   const handlePublishPrices = () => {
@@ -581,6 +551,20 @@ export const RecyclerErpDashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* Quick Inbound Manifest QR Scanner */}
+            <button
+              type="button"
+              onClick={() => {
+                playFeedbackChime('beep');
+                setIsQrScannerOpen(true);
+              }}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+              title="Scan Vendor QR Pass via Live Camera or Device Gallery"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>Scan QR Pass</span>
+            </button>
+
             {/* Restricted Tools Moved to Government Portal; Direct link provided */}
             <button
               type="button"
@@ -599,9 +583,9 @@ export const RecyclerErpDashboard: React.FC = () => {
               type="button"
               onClick={() => {
                 playFeedbackChime('beep');
-                logout();
+                setCurrentView('gateway');
               }}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:border-rose-200 text-slate-600 hover:text-rose-700 border border-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:border-rose-200 text-slate-600 hover:text-rose-700 border border-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>लॉगआउट</span>
@@ -669,7 +653,19 @@ export const RecyclerErpDashboard: React.FC = () => {
                   Real-time queue of traceable lots arriving from registered informal collectors. Verify mass against digital declaration.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    playFeedbackChime('beep');
+                    setIsQrScannerOpen(true);
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+                  title="Scan Inbound Scrap Manifest QR Code via Camera or Gallery"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>Scan QR Code (Camera / Gallery)</span>
+                </button>
                 <span className="text-xs font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
                   Live Sensor Stream Active
@@ -878,24 +874,13 @@ export const RecyclerErpDashboard: React.FC = () => {
                           </td>
 
                           <td className="py-3.5 px-4 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => openWeighbridgeModal(lot)}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-transform active:scale-95 shadow-xs whitespace-nowrap cursor-pointer text-xs"
-                              >
-                                Verify & Pay
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => openRecyclerDeclineModal(lot)}
-                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold rounded-xl transition-colors cursor-pointer text-xs flex items-center gap-1"
-                                title="Decline / Reject Consignment"
-                              >
-                                <Ban className="w-3.5 h-3.5 text-rose-600" />
-                                <span>Decline</span>
-                              </button>
-                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openWeighbridgeModal(lot)}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-transform active:scale-95 shadow-xs whitespace-nowrap"
+                            >
+                              Verify & Pay
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -1002,140 +987,77 @@ export const RecyclerErpDashboard: React.FC = () => {
                   <span>Collector Partners & KYC</span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Manage registered last-mile informal collector partners. Select any vendor folder below to audit their specific paid or pending deposits.
+                  Select any registered collector partner below to view their dedicated audit dossier, weighbridge deposits, and disbursements.
                 </p>
               </div>
 
-              {/* Vendor List Controls */}
-              <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
+              {/* Vendor Action Buttons */}
+              <div className="flex items-center gap-2 w-full sm:w-auto">
                 <button
                   type="button"
                   onClick={() => setIsAddVendorOpen(true)}
-                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>+ Register Partner / Vendor</span>
                 </button>
-
-                <div className="relative flex-1 sm:w-56">
-                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search vendor name, ID..."
-                    value={vendorSearch}
-                    onChange={(e) => {
-                      setVendorSearch(e.target.value);
-                      setVendorPage(1);
-                    }}
-                    className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-600">
-                  <ArrowUpDown className="w-3 h-3 text-slate-400" />
-                  <select
-                    value={vendorSort}
-                    onChange={(e) => {
-                      setVendorSort(e.target.value as typeof vendorSort);
-                      setVendorPage(1);
-                    }}
-                    aria-label="Sort vendor partners"
-                    className="bg-transparent font-medium text-slate-700 text-xs focus:outline-none cursor-pointer"
-                  >
-                    <option value="mass_desc">Deposited Mass: High → Low</option>
-                    <option value="mass_asc">Deposited Mass: Low → High</option>
-                    <option value="lots_desc">Total Lots: High → Low</option>
-                    <option value="name_asc">Partner Name (A-Z)</option>
-                  </select>
-                </div>
               </div>
             </div>
 
-            {/* Registered Partners Table (10 per page) */}
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-500 font-mono uppercase tracking-wider border-b border-slate-200">
-                    <tr>
-                      <th className="py-3 px-4">Partner Profile & ID</th>
-                      <th className="py-3 px-4">Safety Tier</th>
-                      <th className="py-3 px-4">Total Lots</th>
-                      <th className="py-3 px-4">Total E-Waste Deposited</th>
-                      <th className="py-3 px-4">Total Payouts Released</th>
-                      <th className="py-3 px-4 text-right">Folder Access</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 font-sans">
-                    {paginatedVendors.length === 0 ? (
-                      <tr><td colSpan={6} className="py-8 text-center text-slate-500 font-sans">No vendor partners matching search query.</td></tr>
-                    ) : paginatedVendors.map((vendor) => {
-                      const isSelected = selectedVendorId === vendor.id;
-                      return (
-                        <tr 
-                          key={vendor.id} 
-                          onClick={() => {
-                            setSelectedVendorId(vendor.id);
-                            setSelectedVendorPage(1);
-                          }}
-                          className={`transition-colors cursor-pointer ${isSelected ? 'bg-indigo-50/90 border-l-4 border-indigo-600' : 'hover:bg-slate-50'}`}
-                        >
-                          <td className="py-3.5 px-4 flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold overflow-hidden shrink-0 ${isSelected ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-800 border border-indigo-200'}`}>
-                              {vendor.id === 'KBD-MH-4402' ? (
-                                <img src="https://images.unsplash.com/photo-1544717305-2782549b5136?w=200&auto=format&fit=crop&q=80" alt="Avatar" className="w-full h-full object-cover" />
-                              ) : (
-                                <User className="w-4 h-4" />
-                              )}
-                            </div>
-                            <div>
-                              <div className="font-bold text-slate-900 text-xs flex items-center gap-1">
-                                {vendor.name}
-                                {vendor.id === 'KBD-MH-4402' && <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" title="KYC Verified" />}
-                              </div>
-                              <div className="text-[10px] text-slate-500 font-mono mt-0.5">{vendor.id} • {vendor.phone}</div>
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${vendor.id === 'KBD-MH-4402' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
-                              {vendor.id === 'KBD-MH-4402' ? 'Gold Partner' : 'Standard Partner'}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-4 font-mono font-bold text-slate-700">
-                            {vendor.totalLots} Lots
-                          </td>
-                          <td className="py-3.5 px-4 font-mono font-bold text-indigo-900">
-                            {vendor.totalMass.toFixed(1)} kg
-                          </td>
-                          <td className="py-3.5 px-4 font-mono font-bold text-emerald-700">
-                            ₹{vendor.totalPaid.toLocaleString('en-IN')}
-                          </td>
-                          <td className="py-3.5 px-4 text-right">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedVendorId(vendor.id);
-                                setSelectedVendorPage(1);
-                              }}
-                              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors ${isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
-                            >
-                              {isSelected ? 'Open Folder ✓' : 'View Folder'}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+            {/* NEAT SEARCH DROPDOWN FOR PARTNERS (Replacing Long Table) */}
+            <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs">
+              <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+                
+                {/* Search & Select Combobox */}
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-slate-700 font-mono mb-1.5 flex items-center gap-1.5">
+                    <Search className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Search & Select Collector Partner Folder:</span>
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={selectedVendorId}
+                      onChange={(e) => {
+                        setSelectedVendorId(e.target.value);
+                        setSelectedVendorPage(1);
+                        playFeedbackChime('beep');
+                      }}
+                      className="w-full px-4 py-2.5 bg-slate-50 border-2 border-indigo-200 hover:border-indigo-400 focus:border-indigo-600 rounded-2xl text-xs font-bold text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer shadow-2xs"
+                    >
+                      {uniqueCollectors.map((vendor) => (
+                        <option key={vendor.id} value={vendor.id}>
+                          👤 {vendor.name} ({vendor.id}) — {vendor.totalLots} Lots • {vendor.totalMass.toFixed(1)} kg • ₹{vendor.totalPaid.toLocaleString('en-IN')}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
-              <TablePagination
-                currentPage={vendorPage}
-                totalPages={vendorTotalPages}
-                totalItems={filteredVendors.length}
-                pageSize={PAGE_SIZE}
-                onPageChange={setVendorPage}
-              />
+                {/* Quick Partner Pills */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 pt-1 md:pt-5">
+                  <span className="text-[11px] font-mono text-slate-400">Quick Select:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {uniqueCollectors.slice(0, 4).map((v) => (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedVendorId(v.id);
+                          setSelectedVendorPage(1);
+                          playFeedbackChime('beep');
+                        }}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold font-mono transition-all cursor-pointer ${
+                          selectedVendorId === v.id
+                            ? 'bg-indigo-600 text-white shadow-2xs'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
+                        }`}
+                      >
+                        {v.name.split(' ')[0]} ({v.totalLots})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
             
             {/* SELECTED VENDOR DEDICATED FOLDER & AUDIT LEDGER */}
@@ -1777,23 +1699,12 @@ export const RecyclerErpDashboard: React.FC = () => {
 
                                         <button
                                           type="button"
-                                          disabled={isOverridingId === lot.id}
-                                          onClick={() => handleOverrideAnomalyAndPay(lot)}
-                                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg border border-emerald-700 shadow-2xs transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                                          title="Supervisor Clearance: Clear Anomaly & Complete Payout"
-                                        >
-                                          <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                                          <span className="hidden sm:inline">{isOverridingId === lot.id ? 'Processing...' : 'Override & Pay'}</span>
-                                        </button>
-
-                                        <button
-                                          type="button"
                                           onClick={() => openWeighbridgeModal(lot)}
-                                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 shadow-2xs transition-colors flex items-center gap-1 cursor-pointer"
-                                          title="Supervisor Weighbridge Scale Entry"
+                                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 shadow-2xs transition-colors flex items-center gap-1"
+                                          title="Supervisor Clearance Weighbridge Override"
                                         >
                                           <Scale className="w-3.5 h-3.5 text-slate-600" />
-                                          <span className="hidden sm:inline">Weigh Scale</span>
+                                          <span className="hidden sm:inline">Override</span>
                                         </button>
 
                                         <button
@@ -2824,121 +2735,15 @@ export const RecyclerErpDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 3: RECYCLER CONSIGNMENT DECLINE / QUARANTINE MODAL */}
-      {decliningLot && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-rose-200">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
-                  <ShieldAlert className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="text-base font-extrabold text-slate-900">Decline & Quarantine Consignment</h3>
-                  <p className="text-[11px] text-slate-500 font-mono">Facility Gate Rejection • Multi-DB Sync</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDecliningLot(null)}
-                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Consignment Brief */}
-            <div className="bg-rose-50/50 border border-rose-200/80 rounded-2xl p-4 text-xs font-sans space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-[11px] font-bold text-slate-500">Lot Identifier</span>
-                <span className="font-mono font-black text-slate-900 bg-white px-2 py-0.5 rounded-lg border border-slate-200">
-                  {decliningLot.id}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">Material & Category:</span>
-                <span className="font-bold text-slate-900">{decliningLot.materialName} ({decliningLot.category})</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">Declared Mass & Amount:</span>
-                <span className="font-bold text-slate-900">{decliningLot.weightKg} kg • ₹{decliningLot.totalAmount}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">Vendor / Collector:</span>
-                <span className="font-semibold text-slate-800">{decliningLot.collectorName} ({decliningLot.collectorId})</span>
-              </div>
-            </div>
-
-            {/* Reason Selection */}
-            <div>
-              <label className="text-xs font-bold text-slate-700 block mb-1.5">
-                Statutory Grounds for Rejection / Decline *
-              </label>
-              <div className="space-y-1.5 mb-2.5">
-                {[
-                  'Contaminated scrap / Non-compliant material detected at facility gate',
-                  'Open burning soot or toxic chemical residue detected',
-                  'Declared material mismatch / non-electronic scrap',
-                  'Gross weighbridge mass discrepancy exceeds statutory tolerance',
-                  'Hazardous / leaking battery / cracked CRT glass'
-                ].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => setDeclineReason(preset)}
-                    className={`w-full text-left text-xs px-3 py-2 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                      declineReason === preset
-                        ? 'bg-rose-50 border-rose-400 font-bold text-rose-900 shadow-2xs'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    <span>{preset}</span>
-                    {declineReason === preset && <Check className="w-3.5 h-3.5 text-rose-600 flex-shrink-0 ml-1.5" />}
-                  </button>
-                ))}
-              </div>
-
-              <label className="text-[11px] font-bold text-slate-600 block mb-1">
-                Custom Regulatory Reason / Notes (Optional)
-              </label>
-              <textarea
-                rows={2}
-                value={declineReason}
-                onChange={(e) => setDeclineReason(e.target.value)}
-                placeholder="Enter specific regulatory grounds or observation..."
-                className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none focus:border-rose-600 focus:ring-1 focus:ring-rose-600 resize-none"
-              />
-            </div>
-
-            <div className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-start gap-2">
-              <Info className="w-4 h-4 text-slate-500 flex-shrink-0 mt-0.5" />
-              <span>
-                Declining this consignment will immediately update its status to <strong className="text-rose-700">rejected</strong> across SQLite, Cloud Firestore, and the collector's dashboard, transferring it directly to the Quarantined Hazmat Bay.
-              </span>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                disabled={isDeclineSubmitting}
-                onClick={() => setDecliningLot(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isDeclineSubmitting || !declineReason.trim()}
-                onClick={handleConfirmDecline}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-              >
-                <Ban className="w-3.5 h-3.5" />
-                <span>{isDeclineSubmitting ? 'Syncing DB...' : 'Confirm Consignment Rejection'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* AUTHORITY INBOUND QR SCANNER MODAL (CAMERA + GALLERY + LOT ID) */}
+      <AuthorityQrScannerModal
+        isOpen={isQrScannerOpen}
+        onClose={() => setIsQrScannerOpen(false)}
+        onLotSelected={(selectedLot) => {
+          setIsQrScannerOpen(false);
+          setActivePublicOrderId(selectedLot.id);
+        }}
+      />
 
     </div>
   );

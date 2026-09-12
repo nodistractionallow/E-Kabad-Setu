@@ -1,22 +1,20 @@
 import React, { useState, useRef, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { Language, MaterialItem } from '../types';
-import { AI_CLASSIFICATION_PRESETS, SAFETY_PRACTICES } from '../data/mockData';
+import { AI_CLASSIFICATION_PRESETS, SAFETY_PRACTICES, CPCB_STANDARD_CATEGORIES } from '../data/mockData';
 import { playFeedbackChime } from '../utils/speech';
-import { getTrackingUrl } from '../utils/trackingUrl';
-import { CollectorPriceGraphModal } from './CollectorPriceGraphModal';
-import { LiveCameraViewfinder } from './LiveCameraViewfinder';
+import { LiveCameraViewfinder, analyzeImageForSafety } from './LiveCameraViewfinder';
 import { CollectorOrdersManagement } from './CollectorOrdersManagement';
+import { LotPriceHistoryModal } from './LotPriceHistoryModal';
+import { NewOrderQrModal } from './NewOrderQrModal';
 import { QRCodeSVG } from 'qrcode.react';
-import { materialDetectionService } from '../services/materialDetectionService';
-import { MaterialDetectionResult, STRICT_SCRAP_CATEGORIES } from '../types/materialDetection';
+import { getLiveTrackingUrl, getLiveAppOrigin, VERCEL_BASE_URL } from '../utils/trackingUrl';
 
 import { 
   TrendingUp, 
   Volume2, 
   RefreshCw, 
   Camera, 
-  BarChart2,
   AlertTriangle, 
   AlertCircle,
   ShieldCheck, 
@@ -42,18 +40,11 @@ import {
   Maximize2,
   SunMedium,
   Eye,
-  EyeOff,
   Target,
   Upload,
   Package,
   Recycle,
-  Edit3,
-  Moon,
-  UserX,
-  PackageX,
-  Zap,
-  CheckCircle,
-  ExternalLink
+  Edit3
 } from 'lucide-react';
 
 export const CollectorMobileApp: React.FC = () => {
@@ -61,22 +52,22 @@ export const CollectorMobileApp: React.FC = () => {
     language, 
     setLanguage, 
     collector, 
-    setCurrentView,
-    logout,
+    setCurrentView, 
     materials, 
     lots, 
     addLot, 
     addCustomMaterial,
     activeCreatedLot, 
     setActiveCreatedLot,
-    activePublicOrderId,
-    setActivePublicOrderId,
     isOnline, 
     setIsOnline,
     syncPendingAiClassifications,
     isSyncingOfflineQueue,
     speak, 
-    stopAudio 
+    stopAudio,
+    categoryRequests,
+    requestNewCategory,
+    setActivePublicOrderId
   } = useApp();
 
   // Active bottom navigation tab
@@ -91,26 +82,32 @@ export const CollectorMobileApp: React.FC = () => {
 
   // Scan & Lot creator state
   const [livePhoto, setLivePhoto] = useState<string | null>(null);
+  const [selectedCpcbCategory, setSelectedCpcbCategory] = useState<string>('pcb');
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>(() => materials[0]?.id || 'mat_pcb_high');
   const [customCategoryName, setCustomCategoryName] = useState<string>('');
-  const [customRateOverride, setCustomRateOverride] = useState<number | null>(null);
+  const [isCustomCategoryMode, setIsCustomCategoryMode] = useState<boolean>(false);
   const [customWeight, setCustomWeight] = useState<number>(5.0);
   const [showQrModal, setShowQrModal] = useState<boolean>(false);
   const [savedSuccessBanner, setSavedSuccessBanner] = useState<boolean>(false);
+  const [newOrderLotForModal, setNewOrderLotForModal] = useState<any>(null);
 
   // Passbook payment mode filter
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'UPI' | 'CASH'>('ALL');
 
-  const [selectedGraphMaterial, setSelectedGraphMaterial] = useState<MaterialItem | null>(null);
+  // Price history modal state for scrap collector
+  const [priceGraphLot, setPriceGraphLot] = useState<{ name: string; rate?: number; materialId?: string; lotId?: string } | null>(null);
 
-  // On-Device TFLite Material Detection State
-  const [detectionResult, setDetectionResult] = useState<MaterialDetectionResult | null>(null);
-  const [isCloudFallbackLoading, setIsCloudFallbackLoading] = useState<boolean>(false);
+  // Live Gemini Vision Classification State
   const [isAiClassifying, setIsAiClassifying] = useState(false);
   const [aiResult, setAiResult] = useState<{
     isEWaste?: boolean;
+    unableToDetect?: boolean;
     detectedObject?: string;
     detectedCategory: string;
+    category?: string;
+    isOutOfCategory?: boolean;
+    outOfCategoryNotice?: string;
+    priceNotice?: string;
     confidenceScore: number;
     estimatedRatePerKg: number;
     suggestedWeightKg?: number;
@@ -119,156 +116,253 @@ export const CollectorMobileApp: React.FC = () => {
     hazardWarning: string;
     safeAction: string;
     recommendedRecycler: string;
-    isOtherEwaste?: boolean; // true = price not defined, factory decides
+    name_en?: string;
+    name_hi?: string;
+    name_mr?: string;
+    grade?: string;
+    suggestedRatePerKg?: number;
+    anomalyReason?: string;
   } | null>(null);
 
-  // Derived: is the current active/detected category "Other E-waste" (price undefined)?
-  // User's manual selection takes immediate precedence over detectionResult
-  const effectiveCategory = customCategoryName || detectionResult?.predictedCategory || 'Other E-waste';
-  const isOtherEwasteCategory = effectiveCategory === 'Other E-waste';
-
-  const selectedMaterial = materials.find((m) => m.id === selectedMaterialId) || materials[0];
-  // For Other E-waste, rate is always 0 (TBD), so total is 0
-  const currentRate = isOtherEwasteCategory ? 0 : (customRateOverride ?? (aiResult?.estimatedRatePerKg || selectedMaterial.pricePerKg));
-  const calculatedTotal = isOtherEwasteCategory ? 0 : Math.round(customWeight * (aiResult?.isEWaste === false && !customCategoryName ? 0 : currentRate));
-
-  // Centralized Category Selector: Updates rates, CRM yields, hazard flags & speech
-  const selectCategory = (chosen: string) => {
-    playFeedbackChime('beep');
-    setCustomCategoryName(chosen);
-    const isOther = chosen === 'Other E-waste';
-
-    const matched = materials.find((m) => {
-      const catSlug = m.category.toLowerCase();
-      if (chosen === 'PCB / Circuit Board') return catSlug === 'pcb';
-      if (chosen === 'Cables / Wires') return catSlug === 'copper';
-      if (chosen === 'Battery') return catSlug === 'battery';
-      if (chosen === 'Motor / Magnet Assembly') return catSlug === 'magnet';
-      if (chosen === 'Plastic (Mixed)') return catSlug === 'plastic';
-      if (chosen === 'CRT / Monitor') return catSlug === 'crt';
-      if (chosen === 'LCD / Screen') return catSlug === 'lcd';
-      return catSlug === 'other_ewaste' || catSlug === 'mixed';
-    });
-
-    if (matched && !isOther) {
-      setSelectedMaterialId(matched.id);
-      setCustomRateOverride(matched.pricePerKg);
-    } else {
-      setCustomRateOverride(null);
-    }
-
-    setAiResult((prev) => ({
-      isEWaste: true,
-      detectedCategory: chosen,
-      confidenceScore: prev?.confidenceScore && prev.confidenceScore > 50 ? prev.confidenceScore : 95,
-      estimatedRatePerKg: isOther ? 0 : (matched?.pricePerKg || 120),
-      suggestedWeightKg: customWeight,
-      criticalMaterials: matched?.crmYield ? Object.keys(matched.crmYield).filter(k => (matched.crmYield as any)[k] > 0) : [],
-      hazardLevel: matched?.hazardLevel || 'safe',
-      hazardWarning: language === 'hi' ? matched?.hazardWarning_hi || '' : matched?.hazardWarning_en || '',
-      safeAction: language === 'hi' ? matched?.safeAction_hi || '' : matched?.safeAction_en || '',
-      recommendedRecycler: prev?.recommendedRecycler || 'EcoMetals CPCB Authorized Unit #4',
-      isOtherEwaste: isOther
-    }));
-
-    if (detectionResult) {
-      setDetectionResult((prev) => prev ? {
-        ...prev,
-        status: 'valid_material',
-        predictedCategory: chosen as any,
-        isAutoClassifiedOther: isOther,
-        suggestedRatePerKg: isOther ? 0 : (matched?.pricePerKg || 120)
-      } : null);
-    }
+  // CPCB Statutory Rates map - Authority locked (13 Standard Schedules)
+  const CPCB_STATUTORY_RATES: Record<string, { baseRate: number; name_en: string; name_hi: string; name_mr: string; code: string }> = {
+    pcb: { baseRate: 480, name_en: 'Printed Circuit Boards & Motherboards', name_hi: 'सर्किट बोर्ड व मदरबोर्ड', name_mr: 'सर्किट बोर्ड व मदरबोर्ड', code: 'CPCB-SCH-I-PCB' },
+    copper: { baseRate: 720, name_en: 'Insulated & Bare Copper Wires', name_hi: 'तांबे के तार व वाइंडिंग', name_mr: 'तांब्याची वायर व वाइंडिंग', code: 'CPCB-SCH-I-CU' },
+    battery: { baseRate: 310, name_en: 'Lithium & Lead-Acid Batteries', name_hi: 'लिथियम व लेड-एसिड बैटरी', name_mr: 'लिथियम व लेड-ॲसिड बॅटरी', code: 'CPCB-SCH-I-BAT' },
+    crt: { baseRate: 45, name_en: 'CRT Displays & Leaded Glass Tubes', name_hi: 'सीआरटी डिस्प्ले व ग्लास', name_mr: 'सीआरटी डिस्प्ले व ग्लास', code: 'CPCB-SCH-I-CRT' },
+    lcd: { baseRate: 180, name_en: 'LCD / LED Display Modules', name_hi: 'एलसीडी / एलईडी पैनल', name_mr: 'एलसीडी / एलईडी पॅनेल', code: 'CPCB-SCH-I-LCD' },
+    magnet: { baseRate: 540, name_en: 'Rare Earth Neodymium Magnets', name_hi: 'नियोडिमियम चुंबक हार्ड ड्राइव', name_mr: 'निओडिमियम चुंबक हार्ड ड्राइव्ह', code: 'CPCB-SCH-I-MAG' },
+    plastic: { baseRate: 65, name_en: 'Flame-Retardant E-Plastics', name_hi: 'ई-प्लास्टिक केसिंग (ABS-FR)', name_mr: 'ई-प्लास्टिक केसिंग (ABS-FR)', code: 'CPCB-SCH-I-PLAS' },
+    telecom: { baseRate: 650, name_en: 'Telecom & Network Hardware (ITEW1)', name_hi: 'दूरसंचार व नेटवर्क गियर', name_mr: 'दूरसंचार व नेटवर्क गियर', code: 'CPCB-SCH-I-TEL' },
+    solar: { baseRate: 240, name_en: 'Solar PV Panels & Inverter Modules', name_hi: 'सोलर पैनल व इन्वर्टर मॉड्यूल', name_mr: 'सोलर पॅनेल व इन्व्हर्टर मॉड्यूल', code: 'CPCB-SCH-I-PV' },
+    cooling: { baseRate: 160, name_en: 'Cooling & Compressor Units (CEEW1)', name_hi: 'रेफ्रिजरेटर व एसी कंप्रेसर', name_mr: 'रेफ्रिजरेटर व एसी कॉम्प्रेसर', code: 'CPCB-SCH-I-COMP' },
+    medical: { baseRate: 410, name_en: 'Medical & Diagnostic Electronics', name_hi: 'चिकित्सा व डायग्नोस्टिक उपकरण', name_mr: 'वैद्यकीय व डायग्नोस्टिक उपकरणे', code: 'CPCB-SCH-I-MED' },
+    lighting: { baseRate: 35, name_en: 'Fluorescent & Discharge Lamps', name_hi: 'फ्लोरोसेंट ट्यूब व डिस्चार्ज लैंप', name_mr: 'फ्लोरोसेंट ट्यूब व डिस्चार्ज दिवे', code: 'CPCB-SCH-I-LAMP' },
+    mixed: { baseRate: 120, name_en: 'Dismantled Small Appliances / Mix', name_hi: 'मिश्रित छोटे इलेक्ट्रॉनिक उपकरण', name_mr: 'मिश्रित लहान उपकरणे', code: 'CPCB-SCH-I-MIX' }
   };
 
-  const triggerLiveAiClassification = async (base64OrUrl: string, options?: { bypassQualityGate?: boolean }) => {
+  const selectedMaterial = materials.find((m) => m.id === selectedMaterialId) || materials[0];
+  const isOutOfCategory = Boolean(aiResult?.isOutOfCategory);
+  // STRICT: Prices are decided by authorities. Rate cannot change if category is in standard schedule!
+  const currentStatutoryRate = isOutOfCategory ? 0 : (CPCB_STATUTORY_RATES[selectedCpcbCategory]?.baseRate ?? 0);
+  const currentRate = currentStatutoryRate;
+  const calculatedTotal = isOutOfCategory || aiResult?.isEWaste === false || !selectedCpcbCategory ? 0 : Math.round(customWeight * currentRate);
+
+  const triggerLiveAiClassification = async (base64OrUrl: string, isHumanHint?: boolean, isDarkHint?: boolean) => {
     setIsAiClassifying(true);
+
+    // Run client-side safety heuristics instantly on the captured frame
+    let isDarkDetected = Boolean(isDarkHint);
+    let isHumanDetected = Boolean(isHumanHint);
+
     try {
-      const result = await materialDetectionService.detectMaterial(base64OrUrl, { ...options, language });
-      setDetectionResult(result);
+      const safety = await analyzeImageForSafety(base64OrUrl);
+      if (safety.isBlackOrBlank) isDarkDetected = true;
+      if (safety.isHuman) isHumanDetected = true;
+    } catch (e) {
+      console.warn('Safety analyze error:', e);
+    }
 
-      if (result.status === 'rejected_quality') {
-        playFeedbackChime('warning');
-        const msg = language === 'hi' ? result.userMessageHi : language === 'mr' ? result.userMessageMr : result.userMessageEn;
-        speak(msg);
-        setAiResult({
-          isEWaste: false,
-          detectedObject: result.rejectionCode || 'Quality check failed',
-          detectedCategory: 'Quality Rejected',
-          confidenceScore: 0,
-          estimatedRatePerKg: 0,
-          criticalMaterials: [],
-          hazardLevel: 'safe',
-          hazardWarning: '',
-          safeAction: '',
-          recommendedRecycler: 'N/A'
-        });
-        return;
-      }
-
-      if (result.status === 'offline_manual_selection') {
-        playFeedbackChime('beep');
-        const defaultCat = customCategoryName || 'Other E-waste';
-        selectCategory(defaultCat);
-        const speakMsg = language === 'hi'
-          ? (result.userMessageHi || 'नीचे दी गई सूची से कबाड़ का प्रकार चुनें।')
+    // 1. Immediate client rejection for dark / black / blank photos
+    if (isDarkDetected) {
+      setIsAiClassifying(false);
+      const darkReject = {
+        isEWaste: false,
+        detectedObject: 'Black / Dark / Blank Photo',
+        detectedCategory: 'Non E-Waste (Dark / Blank)',
+        name_en: 'Dark / Blank / Obscured Photo (Not E-Waste)',
+        name_hi: 'काला / अंधेरा फोटो (ई-कबाड़ नहीं है)',
+        name_mr: 'काळा / अस्पष्ट फोटो (ई-कचरा नाही)',
+        grade: 'Rejected - Invalid Frame',
+        suggestedWeightKg: 0,
+        estimatedRatePerKg: 0,
+        hazardLevel: 'high' as const,
+        hazardWarning: language === 'hi'
+          ? 'सत्यापन अस्वीकृत: फोटो बहुत अंधेरा, काला या बिना इलेक्ट्रॉनिक वस्तु का है। कृपया रोशनी में असली इलेक्ट्रॉनिक कचरे का साफ फोटो खींचें।'
           : language === 'mr'
-          ? (result.userMessageMr || 'खालील यादीतून प्रकार निवडा.')
-          : (result.userMessageEn || 'Select the material from the list below.');
-        speak(speakMsg);
+          ? 'सत्यापन नाकारले: फोटो खूप काळा किंवा अस्पष्ट आहे. कृपया प्रकाशात स्पष्ट फोटो काढा.'
+          : 'Verification Blocked: Photo is pitch dark, blank, or camera lens is obscured.',
+        safeAction: language === 'hi'
+          ? 'कृपया अच्छी रोशनी में वास्तविक इलेक्ट्रॉनिक हार्डवेयर का फोटो लें।'
+          : 'Please move to well-lit area and capture real electronic hardware.',
+        criticalMaterials: [],
+        confidenceScore: 99.9,
+        recommendedRecycler: 'N/A - Blocked'
+      };
+      setAiResult(darkReject);
+      setCustomCategoryName('Black / Dark Photo (Rejected)');
+      setCustomWeight(0);
+      setSelectedCpcbCategory('');
+      playFeedbackChime('warning');
+      speak(darkReject.hazardWarning);
+      return;
+    }
+
+    // 2. Immediate client rejection for human selfie / person
+    if (isHumanDetected) {
+      setIsAiClassifying(false);
+      const humanReject = {
+        isEWaste: false,
+        detectedObject: 'Human Face / Person (Selfie)',
+        detectedCategory: 'Non E-Waste (Human Face)',
+        name_en: 'Human Face / Person (Non-EWaste)',
+        name_hi: 'मानव चेहरा / व्यक्ति (ई-कबाड़ नहीं है)',
+        name_mr: 'मानवी चेहरा / व्यक्ती (ई-कचरा नाही)',
+        grade: 'Rejected - Non Electronic',
+        suggestedWeightKg: 0,
+        estimatedRatePerKg: 0,
+        hazardLevel: 'high' as const,
+        hazardWarning: language === 'hi' 
+          ? 'सत्यापन अस्वीकृत: मानव चेहरा या सेल्फी ई-कबाड़ के रूप में जमा नहीं की जा सकती।' 
+          : 'Rejected: Human face or non-electronic item cannot be submitted as scrap.',
+        safeAction: 'कृपया केवल वास्तविक इलेक्ट्रॉनिक हार्डवेयर का फोटो लें।',
+        criticalMaterials: [],
+        confidenceScore: 99.8,
+        recommendedRecycler: 'N/A - Blocked'
+      };
+      setAiResult(humanReject);
+      setCustomCategoryName('Human Face (Rejected)');
+      setCustomWeight(0);
+      setSelectedCpcbCategory('');
+      playFeedbackChime('warning');
+      speak(humanReject.hazardWarning);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/ai/classify-material', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          imageBase64: base64OrUrl, 
+          language, 
+          isHumanHint: isHumanDetected,
+          isBlackOrBlankHint: isDarkDetected,
+          notes: ''
+        })
+      });
+      const resData = await res.json();
+      if (resData.success && resData.data) {
+        const data = resData.data;
+        setAiResult(data);
+
+        // Non-electronic waste detected
+        if (data.isEWaste === false) {
+          playFeedbackChime('warning');
+          setCustomCategoryName(data.detectedObject || 'Non-EWaste Item');
+          setCustomWeight(0);
+          setSelectedCpcbCategory('');
+          const warnMsg = data.hazardWarning || (language === 'en'
+            ? `Warning: Not electronic waste. Identified as ${data.detectedObject || 'non-scrap'}. Submission blocked.`
+            : language === 'mr'
+            ? `चेतावणी: हे ई-कचरा नाही. ओळख: ${data.detectedObject || 'इतर वस्तू'}. सबमिशन नाकारले.`
+            : `चेतावनी: यह ई-कबाड़ नहीं है! पहचान: "${data.detectedObject || 'मानव/अन्य वस्तु'}". सबमिशन अस्वीकृत।`);
+          speak(warnMsg);
+          return;
+        }
+
+        // AI unable to detect or low confidence: Ask user to choose manually! (NEVER default to motherboard)
+        if (data.unableToDetect || data.category === 'manual_select') {
+          playFeedbackChime('warning');
+          setSelectedCpcbCategory('');
+          setCustomCategoryName('');
+          setIsCustomCategoryMode(false);
+          const msg = language === 'hi'
+            ? 'एआई इस कबाड़ की पहचान करने में असमर्थ है। कृपया नीचे दी गई सूची से श्रेणी स्वयं चुनें।'
+            : language === 'mr'
+            ? 'AI या स्क्रॅपची ओळख पटवू शकले नाही. कृपया खालील पर्यायांमधून श्रेणी स्वतः निवडा.'
+            : 'AI is unable to detect scrap in this photo. Please choose manually from the categories below.';
+          speak(msg);
+          return;
+        }
+
+        // Out of standard category
+        if (data.isOutOfCategory) {
+          playFeedbackChime('warning');
+          setSelectedCpcbCategory('');
+          setCustomCategoryName(data.detectedCategory || 'Unlisted E-Waste Scrap');
+          setIsCustomCategoryMode(true);
+          if (data.suggestedWeightKg && data.suggestedWeightKg > 0) {
+            setCustomWeight(data.suggestedWeightKg);
+          }
+          const outMsg = language === 'hi'
+            ? `यह स्क्रैप CPCB 13 श्रेणियों से बाहर है। प्राधिकरण से नया अनुमोदन मांगें। मूल्य बाद में तय होगा!`
+            : language === 'mr'
+            ? `हा स्क्रॅप मानक 13 श्रेणींमध्ये नाही. खालील श्रेणी निवडा किंवा मंजुरी मागा.`
+            : `Out of standard CPCB categories. Select standard category or request authority approval. Price will be decided later!`;
+          speak(outMsg);
+          return;
+        }
+
+        // Standard category successfully identified
+        playFeedbackChime('beep');
+        let matchedCatKey = '';
+        if (data.category && CPCB_STATUTORY_RATES[data.category]) {
+          matchedCatKey = data.category;
+        } else {
+          const catLower = ((data.category || '') + ' ' + (data.detectedCategory || '')).toLowerCase();
+          for (const key of Object.keys(CPCB_STATUTORY_RATES)) {
+            if (catLower.includes(key)) {
+              matchedCatKey = key;
+              break;
+            }
+          }
+        }
+
+        if (matchedCatKey && CPCB_STATUTORY_RATES[matchedCatKey]) {
+          setSelectedCpcbCategory(matchedCatKey);
+          const targetMeta = CPCB_STATUTORY_RATES[matchedCatKey];
+          const matchedMat = materials.find(m => m.category === matchedCatKey) || materials[0];
+          setSelectedMaterialId(matchedMat.id);
+          setCustomCategoryName(language === 'hi' ? targetMeta.name_hi : language === 'mr' ? targetMeta.name_mr : targetMeta.name_en);
+          setIsCustomCategoryMode(false);
+
+          if (data.suggestedWeightKg && data.suggestedWeightKg > 0) {
+            setCustomWeight(data.suggestedWeightKg);
+          }
+          if (data.hazardWarning) {
+            playFeedbackChime('warning');
+            speak(data.hazardWarning);
+          } else {
+            speak(`${targetMeta.name_en} identified. CPCB Statutory Rate: ₹${targetMeta.baseRate} per kg.`);
+          }
+        } else {
+          // If match key doesn't fit any known category, strictly require manual select
+          setSelectedCpcbCategory('');
+          speak(language === 'hi' ? 'कृपया नीचे दी गई सूची से श्रेणी स्वयं चुनें।' : 'Please choose category manually from the list below.');
+        }
         return;
       }
-
-      // result.status === 'valid_material' (from Gemini)
-      playFeedbackChime('beep');
-      const categoryName = result.predictedCategory || 'Other E-waste';
-      selectCategory(categoryName);
-
-      const speakMsg = language === 'hi' ? result.userMessageHi : result.userMessageEn;
-      speak(speakMsg);
     } catch (err) {
-      console.error('AI classification error:', err);
+      console.warn('AI classification request error, applying fallback:', err);
     } finally {
       setIsAiClassifying(false);
     }
-  };
 
-  const handleCloudAiFallback = async () => {
-    if (!livePhoto || isCloudFallbackLoading) return;
-    setIsCloudFallbackLoading(true);
-    playFeedbackChime('beep');
-    try {
-      const fallbackRes = await materialDetectionService.consultCloudFallback(livePhoto, language);
-      setDetectionResult(fallbackRes);
-      if (fallbackRes.success && fallbackRes.predictedCategory) {
-        playFeedbackChime('beep');
-        const cat = fallbackRes.predictedCategory;
-        setCustomCategoryName(cat);
-        if (fallbackRes.suggestedRatePerKg) {
-          setCustomRateOverride(fallbackRes.suggestedRatePerKg);
-        }
-        setAiResult({
-          isEWaste: true,
-          detectedCategory: cat,
-          confidenceScore: fallbackRes.confidenceScore || 88,
-          estimatedRatePerKg: fallbackRes.suggestedRatePerKg || 150,
-          criticalMaterials: [],
-          hazardLevel: fallbackRes.hazardLevel || 'safe',
-          hazardWarning: fallbackRes.hazardWarningHi || fallbackRes.hazardWarningEn || '',
-          safeAction: fallbackRes.safeActionHi || fallbackRes.safeActionEn || '',
-          recommendedRecycler: 'EcoMetals CPCB Unit #4'
-        });
-        speak(fallbackRes.userMessageHi || fallbackRes.userMessageEn);
-      } else {
-        playFeedbackChime('warning');
-        speak(fallbackRes.userMessageHi || fallbackRes.userMessageEn);
-      }
-    } catch (err) {
-      console.warn('Cloud AI consultation error:', err);
-    } finally {
-      setIsCloudFallbackLoading(false);
-    }
+    // Client-side fallback if server fails or is unreachable:
+    // STRICT: Do NOT default to motherboard! Prompt user to choose manually!
+    const manualFallback = {
+      isEWaste: true,
+      unableToDetect: true,
+      detectedObject: 'Unrecognized E-Waste (Manual Selection Required)',
+      detectedCategory: 'Choose Manually',
+      category: 'manual_select',
+      confidenceScore: 35.0,
+      estimatedRatePerKg: 0,
+      suggestedWeightKg: 5.0,
+      criticalMaterials: [],
+      hazardLevel: 'safe' as const,
+      hazardWarning: language === 'hi'
+        ? 'एआई कबाड़ की पहचान नहीं कर पाया। कृपया नीचे से श्रेणी स्वयं चुनें।'
+        : 'AI unable to detect. Please choose category manually.',
+      safeAction: 'Please tap a category below.',
+      recommendedRecycler: 'Select Category'
+    };
+    setAiResult(manualFallback);
+    setSelectedCpcbCategory('');
+    setIsCustomCategoryMode(false);
+    playFeedbackChime('warning');
+    speak(language === 'hi' ? 'एआई कबाड़ की पहचान नहीं कर पाया। कृपया नीचे से श्रेणी स्वयं चुनें।' : 'AI unable to detect. Please choose category manually.');
   };
 
   const handleSyncPrices = () => {
@@ -297,71 +391,126 @@ export const CollectorMobileApp: React.FC = () => {
       return;
     }
 
+    if (aiResult?.isEWaste === false) {
+      playFeedbackChime('warning');
+      const errTxt = language === 'en'
+        ? `Submission Blocked: "${aiResult.detectedObject || 'Item'}" is not genuine electronic waste. Please scan real electronic scrap.`
+        : language === 'mr'
+        ? `सबमिशन नाकारले: "${aiResult.detectedObject || 'वस्तू'}" ई-कचरा नाही. कृपया खरा ई-कचरा स्कॅन करा.`
+        : `जमा करना अस्वीकृत: "${aiResult.detectedObject || 'यह वस्तु'}" ई-कबाड़ नहीं है। केवल असली इलेक्ट्रॉनिक कचरा स्वीकार्य है।`;
+      speak(errTxt);
+      alert(errTxt);
+      return;
+    }
+
+    const isOutCat = Boolean(aiResult?.isOutOfCategory);
+    if (!selectedCpcbCategory && !isOutCat) {
+      playFeedbackChime('warning');
+      const errTxt = language === 'en'
+        ? 'Please select a category from the CPCB standard schedule below.'
+        : language === 'mr'
+        ? 'कृपया खालील सीपीसीबी मानकांमधून श्रेणी निवडा.'
+        : 'कृपया नीचे दी गई सीपीसीबी श्रेणियों में से एक श्रेणी चुनें।';
+      speak(errTxt);
+      alert(errTxt);
+      return;
+    }
+
     const isHazard = (aiResult?.hazardLevel || selectedMaterial.hazardLevel) === 'high';
-    const rateToUse = isOtherEwasteCategory ? 0 : currentRate;
-    const lotTotal = isOtherEwasteCategory ? 0 : calculatedTotal;
+    const statutoryInfo = selectedCpcbCategory ? CPCB_STATUTORY_RATES[selectedCpcbCategory] : null;
+    const rateToUse = isOutCat || !statutoryInfo ? 0 : statutoryInfo.baseRate;
+    const lotTotal = isOutCat || !statutoryInfo ? 0 : Math.round(customWeight * rateToUse);
 
-    const finalMaterialName = customCategoryName.trim()
-      ? customCategoryName.trim()
-      : (aiResult?.detectedCategory || selectedMaterial.name_en);
+    const finalMaterialName = isOutCat
+      ? (customCategoryName.trim() || 'Unlisted E-Waste Scrap')
+      : statutoryInfo 
+      ? (language === 'hi' ? statutoryInfo.name_hi : language === 'mr' ? statutoryInfo.name_mr : statutoryInfo.name_en)
+      : 'E-Waste Scrap';
 
-    const existingMat = materials.find(m => m.name_en.toLowerCase() === finalMaterialName.toLowerCase());
-    let finalMaterialId = existingMat?.id || selectedMaterial.id;
+    const matchedMat = materials.find(m => m.category === selectedCpcbCategory) || selectedMaterial;
+    const finalMaterialId = matchedMat.id;
 
-    const createdLot = await addLot({
+    const createdLotId = `LOT-2026-EW-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const newCreatedLot = {
+      id: createdLotId,
       collectorId: collector.id,
       collectorName: collector.name,
       collectorPhone: collector.phone,
       materialId: finalMaterialId,
       materialName: finalMaterialName,
-      category: selectedMaterial.category,
+      category: isOutCat ? 'other' : selectedCpcbCategory,
+      isOutOfCategory: isOutCat,
+      isPendingCategoryApproval: isOutCat,
+      requestedCategoryName: isOutCat ? finalMaterialName : undefined,
       weightKg: customWeight,
       ratePerKg: rateToUse,
       totalAmount: lotTotal,
+      status: 'pending' as const,
+      timestamp: new Date().toISOString(),
       gpsLocation: '18.5204° N, 73.8567° E (Ward 12, Pune)',
       facilityId: 'REC-MH-PN-004',
       facilityName: aiResult?.recommendedRecycler || 'EcoMetals CPCB Unit #4',
       distanceKm: 3.8,
       hazardFlag: isHazard,
       hazardNote: isHazard ? (aiResult?.hazardWarning || selectedMaterial.hazardWarning_hi) : undefined,
-      photoUrl: livePhoto,
+      photoUrl: livePhoto || undefined,
       photos: {
-        topView: livePhoto,
+        topView: livePhoto || undefined,
       },
       requiresSticker: false,
       isOfflineCreated: !isOnline,
       needsOnlineAiCategorization: !isOnline
-    });
+    };
+
+    const savedLot = await addLot(newCreatedLot);
+    setActiveCreatedLot(savedLot);
+    setNewOrderLotForModal(savedLot);
+
+    if (isOutCat) {
+      // Auto-submit CPCB category approval request
+      requestNewCategory({
+        categoryName: finalMaterialName,
+        suggestedRatePerKg: 0,
+        weightKg: customWeight,
+        collectorId: collector.id,
+        collectorName: collector.name,
+        collectorPhone: collector.phone,
+        location: '18.5204° N, 73.8567° E (Ward 12, Pune)',
+        notes: `AI detected unlisted e-waste: "${finalMaterialName}". Mandi price to be determined by CPCB authority upon physical batch review.`,
+        samplePhotoUrl: livePhoto || undefined,
+        lotId: savedLot.id
+      });
+    }
 
     // Reset scan states
     setLivePhoto(null);
     setAiResult(null);
-    setCustomRateOverride(null);
     setCustomCategoryName('');
+    setIsCustomCategoryMode(false);
     setCustomWeight(5.0);
-
-    // Set active lot and IMMEDIATELY trigger working QR Modal
-    setActiveCreatedLot(createdLot);
-    setShowQrModal(true);
 
     // Navigate to orders tab
     setActiveTab('orders');
 
     setSavedSuccessBanner(true);
-    const lotSummary = isOtherEwasteCategory
-      ? (language === 'hi' ? 'अन्य ई-कचरा (दर कारखाना तय करेगा)' : language === 'mr' ? 'इतर ई-कचरा (दर कारखाना ठरवेल)' : 'Other E-waste (factory decides rate)')
-      : `₹${lotTotal}`;
     const audioConfirm = !isOnline
       ? (language === 'en'
           ? `Lot saved offline! Will synchronize once online.`
           : language === 'mr'
           ? `लॉट ऑफलाइन सेव्ह झाला!`
           : `लॉट ऑफलाइन सुरक्षित हुआ!`)
-      : (language === 'en'
-          ? `Lot submitted to Orders. Declared: ${customWeight} kg, ${lotSummary}.`
+      : isOutCat
+      ? (language === 'en'
+          ? `Lot submitted for CPCB Category Approval! Price will be decided later once approved.`
           : language === 'mr'
-          ? `लॉट यशस्वीरीत्या नोंदवला गेला.`
-          : `लॉट सफलतापूर्वक दर्ज हुआ।`);
+          ? `लॉट CPCB मंजुरीसाठी पाठवला! किंमत नंतर ठरवली जाईल.`
+          : `लॉट CPCB अनुमोदन हेतु दर्ज हुआ! मूल्य CPCB द्वारा बाद में तय किया जाएगा।`)
+      : (language === 'en'
+          ? `Lot submitted to Orders & synced to Authority. Declared: ${customWeight} kg, ₹${lotTotal}.`
+          : language === 'mr'
+          ? `लॉट यशस्वीरीत्या नोंदवला गेला आणि प्राधिकरणाशी सिंक झाला (₹${lotTotal}).`
+          : `लॉट सफलतापूर्वक दर्ज हुआ और प्राधिकरण पोर्टल पर सिंक हुआ (₹${lotTotal})।`);
     speak(audioConfirm);
 
     setTimeout(() => setSavedSuccessBanner(false), 5000);
@@ -577,7 +726,11 @@ export const CollectorMobileApp: React.FC = () => {
             >
               <div className="relative">
                 <img
-                  src={collector.selfieUrl}
+                  src={
+                    !collector.selfieUrl || collector.selfieUrl.includes('1544717305') || collector.selfieUrl.includes('1544724569') || collector.selfieUrl.includes('1544716278')
+                      ? 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=400&auto=format&fit=crop&q=80'
+                      : collector.selfieUrl
+                  }
                   alt="Collector Profile"
                   className="w-8 h-8 rounded-lg object-cover border border-emerald-500 shadow-xs"
                 />
@@ -723,12 +876,9 @@ export const CollectorMobileApp: React.FC = () => {
                     key={mat.id}
                     className="bg-white border border-slate-200 hover:border-emerald-500 rounded-2xl p-4 shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
                   >
-                    <div className="cursor-pointer" onClick={() => { playFeedbackChime('beep'); setSelectedGraphMaterial(mat); }}>
+                    <div>
                       <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <h4 className="text-base font-bold text-slate-900 leading-snug hover:text-emerald-700 transition-colors flex items-center gap-1.5">
-                          <span>{matName}</span>
-                          <span className="text-[10px] font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.2 rounded-full">📊</span>
-                        </h4>
+                        <h4 className="text-base font-bold text-slate-900 leading-snug">{matName}</h4>
                         {mat.hazardLevel === 'high' && (
                           <span className="text-[10px] bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-full font-mono uppercase font-bold">
                             Hazard
@@ -736,23 +886,41 @@ export const CollectorMobileApp: React.FC = () => {
                         )}
                       </div>
                       <div className="text-xs text-slate-500 font-mono mb-3">
-                        Grade: <span className="font-semibold text-slate-700">{mat.grade}</span> • <span className="text-teal-700 underline font-semibold">{language === 'hi' ? 'ग्राफ देखें' : language === 'mr' ? 'आलेख पहा' : 'Tap for Graph'}</span>
+                        Grade: <span className="font-semibold text-slate-700">{mat.grade}</span>
                       </div>
                     </div>
 
                     <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-2">
-                      <div className="cursor-pointer" onClick={() => { playFeedbackChime('beep'); setSelectedGraphMaterial(mat); }}>
+                      <div>
                         <div className="text-xl font-mono font-black text-emerald-700">
                           ₹{mat.pricePerKg}
                           <span className="text-xs text-slate-500 font-normal">/kg</span>
                         </div>
-                        <div className="text-xs text-emerald-600 font-mono font-semibold flex items-center gap-1">
-                          <TrendingUp className="w-3 h-3" />
-                          <span>+{mat.trend}% (24h)</span>
+                        <div className="text-[11px] text-emerald-800 font-bold flex items-center gap-1 mt-0.5">
+                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                          <span>{language === 'hi' ? 'CPCB तय सांविधिक समर्थन दर' : language === 'mr' ? 'CPCB हमीभाव (कायदेशीर दर)' : 'CPCB Statutory Floor Rate'}</span>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-2">
+                        {/* Price Graph Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('beep');
+                            setPriceGraphLot({
+                              name: matName,
+                              rate: mat.pricePerKg,
+                              materialId: mat.id
+                            });
+                          }}
+                          className="h-10 px-2.5 rounded-xl bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer text-xs font-bold"
+                          title="View 30-Day Price Trend Graph"
+                        >
+                          <TrendingUp className="w-4 h-4 text-emerald-600" />
+                          <span className="hidden sm:inline">{language === 'hi' ? 'ग्राफ़' : 'Graph'}</span>
+                        </button>
+
                         {/* Audio Rate Player */}
                         <button
                           type="button"
@@ -760,24 +928,10 @@ export const CollectorMobileApp: React.FC = () => {
                             playFeedbackChime('beep');
                             speak(audioDesc);
                           }}
-                          className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 flex items-center justify-center transition-colors shadow-xs cursor-pointer"
-                          title="Listen to rate"
+                          className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 flex items-center justify-center transition-colors shadow-xs cursor-pointer"
+                          title="Listen to statutory rate"
                         >
-                          <Volume2 className="w-3.5 h-3.5" />
-                        </button>
-
-                        {/* 7-Day Simple Vernacular Price Graph Button */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            playFeedbackChime('beep');
-                            setSelectedGraphMaterial(mat);
-                          }}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
-                          title="7-Day Simple Price Graph"
-                        >
-                          <BarChart2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>{language === 'hi' ? 'भाव ग्राफ' : language === 'mr' ? 'दर आलेख' : 'Price Graph'}</span>
+                          <Volume2 className="w-4 h-4" />
                         </button>
                       </div>
                     </div>
@@ -809,7 +963,6 @@ export const CollectorMobileApp: React.FC = () => {
                   onClick={() => {
                     setLivePhoto(null);
                     setAiResult(null);
-                    setCustomRateOverride(null);
                   }}
                   className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-200 cursor-pointer"
                 >
@@ -819,9 +972,6 @@ export const CollectorMobileApp: React.FC = () => {
               )}
             </div>
 
-
-
-
             {/* Desktop 2-Column Responsive Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               
@@ -830,15 +980,15 @@ export const CollectorMobileApp: React.FC = () => {
                 {/* LIVE CAMERA VIEWFINDER (100% Full Uncropped Frame View) */}
                 <LiveCameraViewfinder
                   capturedImage={livePhoto}
-                  onPhotoCaptured={(base64) => {
+                  onPhotoCaptured={(base64, isHumanHint) => {
                     setLivePhoto(base64);
-                    triggerLiveAiClassification(base64);
+                    triggerLiveAiClassification(base64, isHumanHint);
                   }}
                   onRetake={() => {
                     setLivePhoto(null);
                     setAiResult(null);
-                    setDetectionResult(null);
-                    setCustomRateOverride(null);
+                    setCustomCategoryName('');
+                    setIsCustomCategoryMode(false);
                   }}
                   collectorId={collector.id}
                   language={language}
@@ -846,193 +996,88 @@ export const CollectorMobileApp: React.FC = () => {
 
                 {/* AI ANALYZING SPINNER / STATUS */}
                 {isAiClassifying && (
-                  <div className="bg-slate-900 border border-emerald-500/50 rounded-2xl p-4 text-white flex items-center justify-center gap-3 shadow-md animate-pulse">
-                    <Zap className="w-5 h-5 text-emerald-400 animate-spin" />
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 text-white flex items-center justify-center gap-3 shadow-md animate-pulse">
+                    <Sparkles className="w-5 h-5 text-emerald-400 animate-spin" />
                     <span className="text-sm font-bold text-emerald-300">
-                      {language === 'hi'
-                        ? 'ऑन-डिवाइस एआई स्क्रैप गुणवत्ता व श्रेणी तय कर रहा है...'
-                        : language === 'mr'
-                        ? 'ऑन-डिव्हाइस AI स्क्रॅप गुणवत्ता व प्रवर्ग तपासत आहे...'
-                        : 'On-Device TFLite AI Analyzing Scrap Category & Quality Gate...'}
+                      {language === 'hi' ? 'जेमिनी एआई फोटो का सत्यापन व वर्गीकरण कर रहा है...' : language === 'mr' ? 'जेमिनी AI स्क्रॅप तपासत आहे...' : 'Gemini AI Verifying Scrap & Detecting Category...'}
                     </span>
                   </div>
                 )}
 
-                {/* 1. QUALITY REJECTION: TOO DARK */}
-                {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'TOO_DARK' && (
-                  <div className="bg-slate-900 border-2 border-amber-500/80 rounded-2xl p-4 text-amber-100 shadow-md flex items-start gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center shrink-0">
-                      <Moon className="w-6 h-6" />
+                {/* NON E-WASTE / HUMAN / FAKE REJECTION ALERT */}
+                {aiResult?.isEWaste === false && (
+                  <div className="bg-rose-50 border-2 border-rose-500 rounded-2xl p-4 text-rose-950 flex items-start gap-3.5 shadow-md animate-fadeIn">
+                    <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <AlertCircle className="w-6 h-6" />
                     </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-mono text-amber-400 font-bold uppercase tracking-wider">
-                          {language === 'hi' ? '⚠️ अस्वीकृत: रोशनी कम है' : '⚠️ REJECTED: PHOTO TOO DARK'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            playFeedbackChime('warning');
-                            speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
-                          }}
-                          className="text-amber-300 hover:text-amber-100 p-1 cursor-pointer"
-                          title="Listen to instruction"
-                        >
-                          <Volume2 className="w-4 h-4" />
-                        </button>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-black text-rose-900 uppercase tracking-wide flex items-center gap-2">
+                        <span>{language === 'hi' ? '⚠️ अस्वीकृत: यह ई-कबाड़ नहीं है!' : language === 'mr' ? '⚠️ नाकारले: हे ई-कचरा नाही!' : '⚠️ REJECTED: Not Electronic Waste!'}</span>
                       </div>
-                      <div className="text-sm font-bold text-white mt-0.5">
-                        {detectionResult.userMessageEn}
-                      </div>
-                      <div className="text-xs text-amber-200 mt-0.5 font-medium">
-                        {detectionResult.userMessageHi}
-                      </div>
-                      <div className="text-[11px] text-amber-400/80 font-mono mt-1.5">
-                        Brightness: {detectionResult.qualityMetrics?.brightness ?? 20} / 255 (Required ≥ 38)
+                      <p className="text-xs text-rose-950 mt-1 font-bold leading-relaxed">
+                        {aiResult.hazardWarning || (language === 'hi'
+                          ? `पहचान: "${aiResult.detectedObject || 'मानव चेहरा / अन्य वस्तु'}". ${aiResult.anomalyReason || 'कृपया वास्तविक इलेक्ट्रॉनिक हार्डवेयर का फोटो लें।'}`
+                          : `Detected: "${aiResult.detectedObject || 'Human / Non-Electronic'}". ${aiResult.anomalyReason || 'Please capture real electronic hardware.'}`)}
+                      </p>
+                      <div className="mt-2 text-[11px] font-bold text-rose-800 bg-rose-100/90 px-3 py-1 rounded-lg border border-rose-300 inline-flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                        <span>{aiResult.safeAction || (language === 'hi' ? 'केवल सर्किट बोर्ड, तांबे के तार या बैटरी का फोटो लें' : 'Scan genuine PCB, copper wire or battery scrap')}</span>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* 2. QUALITY REJECTION: HUMAN FACE DETECTED */}
-                {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'FACE_DETECTED' && (
-                  <div className="bg-rose-950 border-2 border-rose-500 rounded-2xl p-4 text-rose-100 shadow-md flex items-start gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 flex items-center justify-center shrink-0">
-                      <UserX className="w-6 h-6" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-mono text-rose-300 font-bold uppercase tracking-wider">
-                          {language === 'hi' ? '⚠️ अस्वीकृत: मानव चेहरा पाया गया' : '⚠️ REJECTED: HUMAN FACE DETECTED'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            playFeedbackChime('warning');
-                            speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
-                          }}
-                          className="text-rose-200 hover:text-white p-1 cursor-pointer"
-                          title="Listen to instruction"
-                        >
-                          <Volume2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <div className="text-sm font-bold text-white mt-0.5">
-                        {detectionResult.userMessageEn}
-                      </div>
-                      <div className="text-xs text-rose-200 mt-0.5 font-medium">
-                        {detectionResult.userMessageHi}
-                      </div>
-                      <div className="text-[11px] text-rose-300/80 mt-1 font-semibold">
-                        {language === 'hi' ? 'कृपया केवल कबाड़ हार्डवेयर के सामने कैमरा रखें।' : 'Privacy rule: Please frame electronic scrap hardware only.'}
-                      </div>
-                      <div className="mt-3 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (livePhoto) {
-                              triggerLiveAiClassification(livePhoto, { bypassQualityGate: true });
-                            }
-                          }}
-                          className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
-                        >
-                          <Zap className="w-3.5 h-3.5 fill-current" />
-                          <span>{language === 'hi' ? 'यह कबाड़ है — फिर भी आगे बढ़ें' : 'Proceed with Manual Category'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. MANUAL SELECTION NOTICE CARD */}
-                {detectionResult?.status === 'offline_manual_selection' && (
-                  <div className="bg-sky-950 border-2 border-sky-500/80 rounded-2xl p-4 text-white shadow-md flex items-center justify-between gap-3 animate-fadeIn">
-                    <div className="flex items-center gap-3.5 min-w-0">
-                      <div className="w-11 h-11 rounded-xl bg-sky-500/20 border border-sky-400/50 text-sky-300 flex items-center justify-center shrink-0">
-                        <Sparkles className="w-6 h-6 text-sky-400" />
+                {/* AI SUCCESS DETECTION SUMMARY BADGE */}
+                {aiResult && aiResult.isEWaste !== false && (
+                  <div className="bg-emerald-950 border border-emerald-500/60 rounded-2xl p-4 text-white shadow-md flex items-center justify-between gap-3 animate-fadeIn">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center justify-center shrink-0">
+                        <Sparkles className="w-5 h-5" />
                       </div>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1">
-                            <span>{language === 'hi' ? 'श्रेणी चुनें' : language === 'mr' ? 'प्रवर्ग निवडा' : 'SELECT CATEGORY'}</span>
+                          <span className="text-[11px] font-mono text-emerald-400 font-bold uppercase tracking-wider">AI DETECTED</span>
+                          <span className="text-[10px] bg-emerald-800/80 px-2 py-0.5 rounded text-emerald-200 font-mono">
+                            {aiResult.confidenceScore ? `${Math.round(aiResult.confidenceScore)}% match` : '98% match'}
                           </span>
                         </div>
-                        <div className="text-base font-bold text-white truncate mt-0.5">
-                          {customCategoryName || 'Other E-waste'}
+                        <div className="text-sm font-bold text-white truncate mt-0.5">
+                          {aiResult.detectedCategory || aiResult.name_en}
                         </div>
-                        <div className="text-xs text-sky-200 font-medium">
-                          {language === 'hi' ? 'नीचे दी गई सूची से कबाड़ का प्रकार चुनें।' : language === 'mr' ? 'खालील यादीतून प्रकार निवडा.' : 'Select the material from the list below.'}
+                        <div className="text-xs text-emerald-300 font-medium mt-0.5">
+                          {aiResult.grade || 'Standard Grade'} • Mandi Rate: ₹{aiResult.estimatedRatePerKg || aiResult.suggestedRatePerKg}/kg
                         </div>
                       </div>
                     </div>
-                  </div>
-                )}
 
-                {/* 4. ONLINE AI SUCCESS (GEMINI VISION) */}
-                {detectionResult?.status === 'valid_material' && (
-                  <div className={`border-2 rounded-2xl p-4 text-white shadow-md flex items-center justify-between gap-3 animate-fadeIn ${
-                    detectionResult.isAutoClassifiedOther
-                      ? 'bg-amber-950 border-amber-500/70'
-                      : 'bg-emerald-950 border-emerald-500/80'
-                  }`}>
-                    <div className="flex items-center gap-3.5 min-w-0">
-                      <div className={`w-11 h-11 rounded-xl border flex items-center justify-center shrink-0 ${
-                        detectionResult.isAutoClassifiedOther
-                          ? 'bg-amber-500/20 border-amber-400/50 text-amber-300'
-                          : 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300'
-                      }`}>
-                        <CheckCircle2 className={`w-6 h-6 ${detectionResult.isAutoClassifiedOther ? 'text-amber-400' : 'text-emerald-400'}`} />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[11px] font-mono font-bold uppercase tracking-wider flex items-center gap-1 ${
-                            detectionResult.isAutoClassifiedOther ? 'text-amber-400' : 'text-emerald-400'
-                          }`}>
-                            <Sparkles className="w-3 h-3 fill-current" />
-                            <span>{detectionResult.isAutoClassifiedOther ? 'OTHER E-WASTE' : 'GEMINI AI CLASSIFIED'}</span>
-                          </span>
-                          {detectionResult.confidenceScore ? (
-                            <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
-                              detectionResult.isAutoClassifiedOther
-                                ? 'bg-amber-800/90 text-amber-100'
-                                : 'bg-emerald-800/90 text-emerald-100'
-                            }`}>
-                              {detectionResult.confidenceScore}% conf
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="text-base font-bold text-white truncate mt-0.5">
-                          {detectionResult.predictedCategory}
-                        </div>
-                        <div className={`text-xs font-medium ${detectionResult.isAutoClassifiedOther ? 'text-amber-200' : 'text-emerald-200'}`}>
-                          {language === 'hi' ? detectionResult.userMessageHi : language === 'mr' ? detectionResult.userMessageMr : detectionResult.userMessageEn}
-                        </div>
-                        {!detectionResult.isAutoClassifiedOther && (
-                          <div className="text-xs text-emerald-300 font-semibold mt-0.5">
-                            {detectionResult.grade || 'Standard CPCB Grade'} • Rate: ₹{detectionResult.suggestedRatePerKg}/kg
-                          </div>
-                        )}
-                        {detectionResult.isAutoClassifiedOther && (
-                          <div className="text-xs text-amber-300 font-semibold mt-0.5">
-                            💰 {language === 'hi' ? 'कारखाना अंतिम भाव तय करेगा' : 'Factory will decide final rate'}
-                          </div>
-                        )}
-                      </div>
-                    </div>
                     <button
                       type="button"
                       onClick={() => {
+                        if (aiResult.detectedCategory) {
+                          setCustomCategoryName(aiResult.detectedCategory);
+                        }
+                        if (aiResult.isOutOfCategory) {
+                          setIsCustomCategoryMode(true);
+                        } else {
+                          const matchedCat = CPCB_STANDARD_CATEGORIES.find(
+                            c => c.name.toLowerCase().includes(aiResult.detectedCategory?.toLowerCase() || '') ||
+                                 c.id.toLowerCase() === aiResult.detectedCategory?.toLowerCase()
+                          );
+                          if (matchedCat) {
+                            setSelectedCpcbCategory(matchedCat.id);
+                            const matchedMat = materials.find(m => m.category === matchedCat.id) || materials[0];
+                            setSelectedMaterialId(matchedMat.id);
+                          }
+                          setIsCustomCategoryMode(false);
+                        }
                         playFeedbackChime('beep');
-                        speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
                       }}
-                      className={`p-1.5 rounded-lg cursor-pointer ${detectionResult.isAutoClassifiedOther ? 'bg-amber-900/80 hover:bg-amber-800 text-amber-200' : 'bg-emerald-900/80 hover:bg-emerald-800 text-emerald-200'}`}
-                      title="Speak result"
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shrink-0 shadow-xs cursor-pointer"
                     >
-                      <Volume2 className="w-4 h-4" />
+                      {language === 'hi' ? 'लागू करें' : 'Applied ✓'}
                     </button>
                   </div>
                 )}
-
 
                 {/* HAZARD WARNING (If detected) */}
                 {((aiResult?.hazardLevel === 'high') || selectedMaterial.hazardLevel === 'high') && (
@@ -1067,206 +1112,255 @@ export const CollectorMobileApp: React.FC = () => {
                 )}
               </div>
 
-              {/* Right Column: Category Display, Weight, Valuation and Save */}
+              {/* Right Column: Category, Rate & Weight, Valuation and QR Handover */}
               <div className="lg:col-span-5 space-y-4">
                 
-                {/* BLOCK 1: AI-DETECTED CATEGORY (Read-Only Display + Dropdown Override) */}
-                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                      <Package className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{language === 'hi' ? 'स्क्रैप श्रेणी (एआई द्वारा चुनी गई)' : language === 'mr' ? 'स्क्रॅप प्रवर्ग (AI निवडलेला)' : 'Scrap Category (AI Selected)'}</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        playFeedbackChime('beep');
-                        const currentMat = materials.find(m => m.name_en === customCategoryName || m.id === selectedMaterialId) || materials[0];
-                        setSelectedGraphMaterial(currentMat);
-                      }}
-                      className="px-2 py-0.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer shadow-2xs"
-                      title="View Rate Graph for Category"
-                    >
-                      <BarChart2 className="w-3 h-3 text-teal-600" />
-                      <span>{language === 'hi' ? 'भाव ग्राफ' : language === 'mr' ? 'दर आलेख' : 'Price Graph'}</span>
-                    </button>
-                  </div>
-
-                  {/* Read-only detected category display */}
-                  <div className={`w-full border-2 rounded-xl px-3.5 py-3 text-sm font-bold flex items-center justify-between gap-2 ${
-                    isOtherEwasteCategory
-                      ? 'bg-amber-50 border-amber-300 text-amber-900'
-                      : detectionResult?.status === 'valid_material'
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-900'
-                      : 'bg-slate-50 border-slate-300 text-slate-600'
-                  }`}>
-                    <span>
-                      {customCategoryName || (language === 'hi' ? selectedMaterial.name_hi : selectedMaterial.name_en)}
-                    </span>
-                    {isOtherEwasteCategory && (
-                      <span className="text-[10px] bg-amber-200 text-amber-800 font-mono px-2 py-0.5 rounded-full font-bold shrink-0">
-                        TBD
-                      </span>
-                    )}
-                    {!isOtherEwasteCategory && detectionResult?.status === 'valid_material' && (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    )}
-                  </div>
-
-                  {/* 1-Tap Category Quick Chips */}
-                  <div>
-                    <label className="text-[11px] text-slate-500 font-medium block mb-1.5">
-                      {language === 'hi' ? '⚡ 1-टैप त्वरित श्रेणी चुनें:' : language === 'mr' ? '⚡ 1-टॅप जलद प्रवर्ग निवडा:' : '⚡ 1-Tap Quick Select:'}
-                    </label>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {STRICT_SCRAP_CATEGORIES.map((cat) => {
-                        const isSelected = (customCategoryName || detectionResult?.predictedCategory) === cat;
-                        const icon = cat === 'Cables / Wires' ? '🔌'
-                          : cat === 'PCB / Circuit Board' ? '🟢'
-                          : cat === 'Battery' ? '🔋'
-                          : cat === 'Plastic (Mixed)' ? '🧴'
-                          : cat === 'Motor / Magnet Assembly' ? '⚙️'
-                          : cat === 'LCD / Screen' ? '📱'
-                          : cat === 'CRT / Monitor' ? '📺'
-                          : '📦';
-                        return (
-                          <button
-                            key={cat}
-                            type="button"
-                            onClick={() => selectCategory(cat)}
-                            className={`px-2 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer text-left border ${
-                              isSelected
-                                ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs ring-1 ring-emerald-500'
-                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                            }`}
-                          >
-                            <span className="shrink-0">{icon}</span>
-                            <span className="truncate">{cat.replace(' / ', '/')}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Dropdown: collector can override with a different standard category */}
-                  <div>
-                    <label className="text-[11px] text-slate-500 font-medium block mb-1">
-                      {language === 'hi' ? 'या मंडी सूची से बदलें:' : language === 'mr' ? 'किंवा बदला:' : 'Or change category:'}
-                    </label>
-                    <select
-                      value={customCategoryName || ''}
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          selectCategory(e.target.value);
-                        }
-                      }}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-emerald-500"
-                    >
-                      <option value="">{language === 'hi' ? '📋 श्रेणी चुनें...' : language === 'mr' ? '📋 प्रवर्ग निवडा...' : '📋 Select category...'}</option>
-                      {STRICT_SCRAP_CATEGORIES.map((cat) => (
-                        <option key={cat} value={cat}>{cat}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* BLOCK 2: WEIGHT — Only editable field */}
-                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-                  <div className="flex justify-between items-center mb-3">
-                    <label className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                      <Edit3 className="w-4 h-4 text-emerald-600" />
-                      <span>{t.weightLabel}</span>
-                    </label>
-                    <span className="text-xs font-mono text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg">
-                      {customWeight} kg
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 mb-3">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        playFeedbackChime('beep');
-                        setCustomWeight((prev) => Math.max(0.5, parseFloat((prev - 0.5).toFixed(1))));
-                      }}
-                      className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 font-black text-lg flex items-center justify-center border border-slate-300 cursor-pointer"
-                    >
-                      −
-                    </button>
-                    <input
-                      type="number"
-                      value={customWeight}
-                      min={0.5}
-                      max={500}
-                      step={0.5}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        if (!isNaN(val) && val >= 0.1) {
-                          setCustomWeight(val);
-                        }
-                      }}
-                      className="flex-1 text-center font-mono font-black text-2xl bg-slate-50 border border-slate-300 rounded-xl py-2 text-slate-900 focus:outline-none focus:border-emerald-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        playFeedbackChime('beep');
-                        setCustomWeight((prev) => parseFloat((prev + 0.5).toFixed(1)));
-                      }}
-                      className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 font-black text-lg flex items-center justify-center border border-slate-300 cursor-pointer"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-
-                {/* BLOCK 3: LIVE CPCB RATE & VALUATION CARD */}
-                {isOtherEwasteCategory ? (
-                  <div className="bg-amber-50/80 border-2 border-dashed border-amber-300 rounded-2xl p-4 space-y-2">
+                {/* OUT OF CPCB CATEGORY BANNER */}
+                {isOutOfCategory && (
+                  <div className="bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-white border-2 border-amber-400 rounded-2xl p-4 shadow-sm space-y-3 animate-fadeIn">
                     <div className="flex items-start gap-2.5">
-                      <HelpCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                      <div>
-                        <div className="text-sm font-extrabold text-amber-900">
-                          {language === 'hi' ? 'मूल्यांकन: कारखाना तय करेगा' : language === 'mr' ? 'मूल्यांकन: कारखाना ठरवेल' : 'Valuation: Factory Decides'}
-                        </div>
-                        <div className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+                      <div className="w-8 h-8 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center shrink-0 shadow-xs font-black">
+                        <AlertTriangle className="w-4 h-4 text-slate-950" />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="text-xs font-black uppercase tracking-wider text-amber-950">
+                          {language === 'hi' ? '⚠️ श्रेणी CPCB मानक 8 सूची में नहीं है' : language === 'mr' ? '⚠️ ही श्रेणी CPCB मानक यादीत नाही' : '⚠️ Category Not in CPCB Standard Schedule'}
+                        </h4>
+                        <p className="text-[11px] text-amber-900 mt-0.5 leading-snug">
                           {language === 'hi'
-                            ? 'इस वस्तु का भाव फैक्ट्री द्वारा भौतिक जांच व धातु परीक्षण के बाद अंतिम बिल में जोड़ा जाएगा।'
+                            ? 'यह स्क्रैप CPCB 8 श्रेणियों से बाहर है। आप नीचे दी गई 8 मानक श्रेणियों में से चुन सकते हैं या CPCB प्राधिकरण से नया अनुमोदन मांग सकते हैं (मूल्य प्राधिकरण द्वारा बाद में तय होगा)।'
                             : language === 'mr'
-                            ? 'या वस्तूचे दर कारखान्याद्वारे प्रत्यक्ष तपासणीनंतर अंतिम बिलात जोडले जातील.'
-                            : 'Rate will be finalized by the recycling factory after physical assaying. It will be credited in your settlement invoice.'}
-                        </div>
+                            ? 'हा ई-कचरा CPCB 8 श्रेणींमध्ये नाही. खालील 8 प्रमाणित श्रेणी निवडा किंवा CPCB कडून मंजुरी मागा (किंमत नंतर ठरेल).'
+                            : 'This item is not in the standard CPCB scrap schedule. Choose an existing CPCB category below or request official category approval.'}
+                        </p>
                       </div>
                     </div>
-                    <div className="flex justify-between items-center pt-2 border-t border-amber-200 text-xs text-amber-800 font-mono">
-                      <span>{t.unitRate}: <strong>₹0 (TBD)</strong></span>
-                      <span>{t.totalValue}: <strong>₹0</strong></span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-linear-to-r from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-2xl p-4 flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-mono text-slate-500 font-bold uppercase">{t.unitRate}</div>
-                      <div className="text-sm font-bold text-slate-800">₹{currentRate} / kg</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs font-mono text-emerald-800 font-extrabold uppercase">{t.totalValue}</div>
-                      <div className="text-3xl font-black font-mono text-emerald-950">
-                        ₹{calculatedTotal}
-                      </div>
+
+                    <div className="p-2 rounded-xl bg-amber-100/70 border border-amber-300 text-[10px] font-mono text-amber-950 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-700 shrink-0 animate-pulse" />
+                      <span>{language === 'hi' ? 'अनुरोध भेजने पर केवल वजन दर्ज होगा, मूल्य CPCB द्वारा बाद में तय होगा।' : 'If submitted unlisted, only weight is logged. Price decided later by CPCB.'}</span>
                     </div>
                   </div>
                 )}
+
+                {/* BLOCK 1: CPCB 13 STANDARD CATEGORIES SELECTOR (MANDATORY SELECTION) */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                      <span>{language === 'hi' ? 'CPCB मानक 13 श्रेणियां (निश्चित सरकारी दर)' : language === 'mr' ? 'CPCB 13 प्रमाणित श्रेणी (सरकारी हमीभाव)' : 'CPCB Standard 13 Categories (Authority Fixed Rates)'}</span>
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      {selectedCpcbCategory && CPCB_STATUTORY_RATES[selectedCpcbCategory] && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const name = language === 'hi' 
+                              ? CPCB_STATUTORY_RATES[selectedCpcbCategory].name_hi 
+                              : CPCB_STATUTORY_RATES[selectedCpcbCategory].name_en;
+                            setPriceGraphLot({
+                              name,
+                              rate: currentRate,
+                              materialId: selectedMaterial?.id
+                            });
+                          }}
+                          className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200 transition-colors cursor-pointer"
+                        >
+                          <TrendingUp className="w-3 h-3 text-emerald-700" />
+                          <span>{language === 'hi' ? 'मूल्य ग्राफ़' : 'Price Graph'}</span>
+                        </button>
+                      )}
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        13 Schedules
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {CPCB_STANDARD_CATEGORIES.map((cat) => {
+                      const isSelected = !isOutOfCategory && selectedCpcbCategory === cat.id;
+                      const catName = language === 'hi' ? cat.name_hi : language === 'mr' ? cat.name_mr : cat.name;
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('beep');
+                            setSelectedCpcbCategory(cat.id);
+                            const matched = materials.find(m => m.category === cat.id) || materials[0];
+                            setSelectedMaterialId(matched.id);
+                            setCustomCategoryName(catName);
+                            setIsCustomCategoryMode(false);
+                            if (aiResult) {
+                              setAiResult({
+                                ...aiResult,
+                                isOutOfCategory: false,
+                                detectedCategory: cat.name,
+                                estimatedRatePerKg: cat.baseRate
+                              });
+                            }
+                            speak(`${catName} selected. Statutory rate is ₹${cat.baseRate} per kg.`);
+                          }}
+                          className={`text-left p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between ${
+                            isSelected
+                              ? 'bg-emerald-50/90 border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs'
+                              : 'bg-white hover:bg-slate-50 border-slate-200 hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-1">
+                            <span className={`text-xs font-bold leading-tight ${isSelected ? 'text-emerald-950' : 'text-slate-800'}`}>
+                              {catName}
+                            </span>
+                            {isSelected && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] font-mono mt-2 pt-1 border-t border-slate-100">
+                            <span className="text-slate-500">{cat.code.replace('CPCB-SCH-I-', '')}</span>
+                            <span className={`font-extrabold ${isSelected ? 'text-emerald-800' : 'text-slate-700'}`}>
+                              ₹{cat.baseRate}/kg
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {isOutOfCategory && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <div className="text-[11px] font-bold text-amber-900 bg-amber-50 p-2.5 rounded-xl border border-amber-200 flex items-center justify-between">
+                        <span>अस्वीकृत गैर-सूचीबद्ध श्रेणी: {customCategoryName || 'Unlisted E-Waste'}</span>
+                        <span className="text-[10px] font-mono font-extrabold uppercase text-amber-700">अनुरोध मोड</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* BLOCK 2: STATUTORY RATE & WEIGHT ADJUSTMENT */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Rate per kg: STRICTLY FIXED BY AUTHORITY */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-2 flex flex-col justify-between">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>{language === 'hi' ? 'सांविधिक दर (Statutory Rate)' : language === 'mr' ? 'कायदेशीर हमीभाव दर' : 'Statutory Rate'}</span>
+                      </label>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        🔒 CPCB Locked
+                      </span>
+                    </div>
+
+                    {isOutOfCategory ? (
+                      <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 text-center space-y-1 my-auto">
+                        <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-amber-950 font-mono">
+                          <Clock className="w-3.5 h-3.5 text-amber-700 animate-pulse" />
+                          <span>CPCB Tariff Pending</span>
+                        </div>
+                        <div className="text-[11px] text-amber-900 font-medium">
+                          {language === 'hi' ? 'दर CPCB प्राधिकरण द्वारा बाद में तय की जाएगी (मूल्य: ₹0/kg)' : language === 'mr' ? 'किंमत CPCB द्वारे नंतर ठरेल (दर: ₹0/kg)' : 'Price will be determined by CPCB authority (Rate: ₹0/kg)'}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1 my-auto">
+                        <div className="flex items-baseline justify-between">
+                          <div className="text-2xl font-mono font-black text-emerald-700">
+                            ₹{currentRate}
+                            <span className="text-xs text-slate-500 font-normal font-sans ml-1">/ kg</span>
+                          </div>
+                          <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100/80 px-2 py-0.5 rounded-md border border-emerald-300">
+                            सरकारी तय दर
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 leading-tight">
+                          {language === 'hi'
+                            ? 'CPCB प्राधिकरण द्वारा निश्चित दर। इसे बदला नहीं जा सकता।'
+                            : 'Authority fixed statutory rate. Non-negotiable.'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Weight adjustment */}
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-xs font-bold text-slate-800">{t.weightLabel}</label>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('beep');
+                            setCustomWeight((prev) => Math.max(0.5, parseFloat((prev - 0.5).toFixed(1))));
+                          }}
+                          className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 font-black text-xs flex items-center justify-center border border-slate-300 cursor-pointer"
+                        >
+                          -
+                        </button>
+                        <span className="text-xs font-black font-mono text-emerald-900 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 min-w-[55px] text-center">
+                          {customWeight} kg
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('beep');
+                            setCustomWeight((prev) => parseFloat((prev + 0.5).toFixed(1)));
+                          }}
+                          className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 font-black text-xs flex items-center justify-center border border-slate-300 cursor-pointer"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="100"
+                      step="0.5"
+                      value={customWeight}
+                      onChange={(e) => setCustomWeight(parseFloat(e.target.value))}
+                      className="w-full accent-emerald-600 cursor-pointer h-1.5 bg-slate-200 rounded-lg mt-2"
+                    />
+                  </div>
+                </div>
+
+                {/* BLOCK 3: TOTAL VALUATION */}
+                <div className={`border-2 rounded-2xl p-4 flex items-center justify-between shadow-xs transition-all ${
+                  isOutOfCategory 
+                    ? 'bg-gradient-to-br from-amber-50 to-white border-amber-300'
+                    : 'bg-gradient-to-br from-emerald-50 to-white border-emerald-300'
+                }`}>
+                  <div>
+                    <div className="text-xs font-mono text-slate-500 font-bold uppercase">{t.unitRate}</div>
+                    <div className="text-sm font-bold text-slate-800">
+                      {isOutOfCategory ? 'CPCB Tariff Pending' : `₹${currentRate} / kg`}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-mono font-extrabold uppercase tracking-wider text-slate-600">
+                      {isOutOfCategory ? 'Valuation Status' : t.totalValue}
+                    </div>
+                    {isOutOfCategory ? (
+                      <div className="text-base sm:text-lg font-black text-amber-900 flex items-center justify-end gap-1 font-mono">
+                        <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
+                        <span>Price will be decided later</span>
+                      </div>
+                    ) : (
+                      <div className="text-3xl font-black font-mono text-emerald-950">
+                        ₹{calculatedTotal}
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 {/* SAVE LOT & SEND TO ORDERS BUTTON */}
                 <button
                   type="button"
                   onClick={handleSaveLot}
-                  disabled={!livePhoto || (aiResult?.isEWaste === false && !customCategoryName)}
+                  disabled={!livePhoto || aiResult?.isEWaste === false}
                   className={`w-full py-4 font-extrabold rounded-xl flex items-center justify-center gap-2.5 shadow-md transition-all cursor-pointer ${
                     !livePhoto
                       ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed shadow-none'
-                      : (aiResult?.isEWaste === false && !customCategoryName)
+                      : aiResult?.isEWaste === false
                       ? 'bg-rose-100 text-rose-400 border border-rose-200 cursor-not-allowed shadow-none'
+                      : isOutOfCategory
+                      ? 'bg-amber-600 hover:bg-amber-700 active:scale-[0.99] text-white shadow-amber-700/25'
                       : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white shadow-emerald-700/25'
                   }`}
                 >
@@ -1277,22 +1371,22 @@ export const CollectorMobileApp: React.FC = () => {
                         {language === 'hi' ? '📸 पहले लाइव फोटो खींचें' : language === 'mr' ? '📸 आधी फोटो काढा' : '📸 Snap Live Photo First'}
                       </span>
                     </>
-                  ) : (aiResult?.isEWaste === false && !customCategoryName) ? (
+                  ) : aiResult?.isEWaste === false ? (
                     <>
                       <AlertCircle className="w-5 h-5 text-rose-500" />
                       <span className="text-sm">
                         {language === 'hi' ? 'अमान्य ई-कचरा (फोटो खारिज)' : 'Invalid E-Waste Photo'}
                       </span>
                     </>
-                  ) : isOtherEwasteCategory ? (
+                  ) : isOutOfCategory ? (
                     <>
-                      <CheckCircle2 className="w-5 h-5" />
+                      <Clock className="w-5 h-5" />
                       <span className="text-base font-extrabold">
                         {language === 'hi'
-                          ? `✓ लॉट सेव करें — भाव कारखाना तय करेगा`
+                          ? `✓ लॉट सेव करें व CPCB अनुमोदन मांगें (${customWeight} kg - मूल्य बाद में)`
                           : language === 'mr'
-                          ? `✓ लॉट सेव्ह करा — दर कारखाना ठरवेल`
-                          : `✓ Save Lot — Factory Decides Rate`}
+                          ? `✓ लॉट सेव्ह करा व CPCB मंजुरी मागा (${customWeight} kg - किंमत नंतर)`
+                          : `✓ Save Lot & Request CPCB Approval (${customWeight} kg - Price TBD)`}
                       </span>
                     </>
                   ) : (
@@ -1420,12 +1514,7 @@ export const CollectorMobileApp: React.FC = () => {
                       )}
                     </div>
                     <div className="text-xs text-slate-500 font-mono mt-1">
-                      {lot.id} • {lot.weightKg} kg
-                      {lot.ratePerKg === 0 && lot.materialName === 'Other E-waste' ? (
-                        <span className="ml-1 bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded font-black text-[10px]">@ TBD</span>
-                      ) : (
-                        <span> @ ₹{lot.ratePerKg}</span>
-                      )}
+                      {lot.id} • {lot.weightKg} kg @ ₹{lot.ratePerKg}
                     </div>
                     <div className="text-xs text-slate-400 font-mono mt-0.5">
                       {lot.timestamp}
@@ -1433,15 +1522,9 @@ export const CollectorMobileApp: React.FC = () => {
                   </div>
 
                   <div className="text-right">
-                    {lot.ratePerKg === 0 && lot.materialName === 'Other E-waste' ? (
-                      <div className="text-xs font-black font-mono text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
-                        {language === 'hi' ? 'भाव TBD' : language === 'mr' ? 'दर TBD' : 'Rate TBD'}
-                      </div>
-                    ) : (
-                      <div className="text-base font-bold font-mono text-slate-900">
-                        ₹{lot.totalAmount}
-                      </div>
-                    )}
+                    <div className="text-base font-bold font-mono text-slate-900">
+                      ₹{lot.totalAmount}
+                    </div>
                     <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full font-mono inline-block mt-1 ${
                       lot.status === 'paid'
                         ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
@@ -1536,7 +1619,11 @@ export const CollectorMobileApp: React.FC = () => {
 
               <div className="text-center mb-6">
                 <img
-                  src={collector.selfieUrl}
+                  src={
+                    !collector.selfieUrl || collector.selfieUrl.includes('1544717305') || collector.selfieUrl.includes('1544724569') || collector.selfieUrl.includes('1544716278')
+                      ? 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=400&auto=format&fit=crop&q=80'
+                      : collector.selfieUrl
+                  }
                   alt="Collector"
                   className="w-20 h-20 rounded-2xl mx-auto object-cover border-4 border-emerald-500 shadow-md mb-2"
                 />
@@ -1571,7 +1658,7 @@ export const CollectorMobileApp: React.FC = () => {
               onClick={() => {
                 setIsDrawerOpen(false);
                 playFeedbackChime('beep');
-                logout();
+                setCurrentView('gateway');
               }}
               className="w-full py-3 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
@@ -1610,10 +1697,10 @@ export const CollectorMobileApp: React.FC = () => {
             </div>
 
             {/* Interactive High-Contrast QR Stamp */}
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-3">
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-4">
               <div className="w-48 h-48 bg-white p-2.5 rounded-xl flex flex-col items-center justify-center relative border border-slate-200">
                 <QRCodeSVG 
-                  value={getTrackingUrl(activeCreatedLot.id)} 
+                  value={getLiveTrackingUrl(activeCreatedLot.id)} 
                   size={170} 
                   level={"H"}
                   includeMargin={false}
@@ -1625,68 +1712,19 @@ export const CollectorMobileApp: React.FC = () => {
                   </div>
                 </div>
               </div>
-            </div>
-
-            {/* Live Web Tracking URL */}
-            <div className="mb-4 px-2">
-              <p className="text-[11px] text-slate-500 font-medium">
-                {language === 'hi' 
-                  ? '📱 फोन कैमरे से स्कैन करें या नीचे दिए बटन से लाइव स्टेटस खोलें:' 
-                  : language === 'mr'
-                  ? '📱 फोन कॅमेऱ्याने स्कॅन करा किंवा खालील बटणावर क्लिक करा:'
-                  : '📱 Scan with phone camera or tap below to open live tracking & payout:'}
-              </p>
-              <a 
-                href={getTrackingUrl(activeCreatedLot.id)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[11px] text-emerald-700 font-mono underline break-all hover:text-emerald-900 mt-1 inline-block"
-              >
-                {getTrackingUrl(activeCreatedLot.id)}
-              </a>
-            </div>
-
-            {/* TBD notice banner for Other E-waste */}
-            {activeCreatedLot.ratePerKg === 0 && activeCreatedLot.materialName === 'Other E-waste' && (
-              <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-2.5 mb-3 flex items-start gap-2 text-left">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <div className="text-xs font-extrabold text-amber-900 uppercase tracking-wide">
-                    {language === 'hi' ? 'भाव: कारखाना तय करेगा' : language === 'mr' ? 'दर: कारखाना ठरवेल' : 'Price: Factory Will Decide'}
-                  </div>
-                  <div className="text-[11px] text-amber-800 font-medium mt-0.5">
-                    {language === 'hi'
-                      ? 'यह पर्ची वजन के साथ मान्य है। रिसाइक्लर वजन-पुल पर अंतिम भाव तय करेगा।'
-                      : language === 'mr'
-                      ? 'हा स्लिप वजनासह वैध आहे. रिसायकलर वजनपुलावर अंतिम दर ठरवेल.'
-                      : 'This slip is valid with weight only. Recycler will set final rate at weighbridge.'}
-                  </div>
-                </div>
+              <div className="mt-2 text-[10px] font-mono text-emerald-800 font-bold">
+                {VERCEL_BASE_URL}
               </div>
-            )}
+            </div>
 
             <div className="bg-slate-50 rounded-2xl p-4 text-left border border-slate-200 text-xs space-y-2 font-mono mb-4">
               <div className="flex justify-between">
                 <span className="text-slate-500">{t.weightAndRate}</span>
-                {activeCreatedLot.ratePerKg === 0 && activeCreatedLot.materialName === 'Other E-waste' ? (
-                  <span className="font-bold text-amber-700">
-                    {activeCreatedLot.weightKg} kg @ <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-black">TBD</span>
-                  </span>
-                ) : (
-                  <span className="text-slate-900 font-bold">{activeCreatedLot.weightKg} kg @ ₹{activeCreatedLot.ratePerKg}/kg</span>
-                )}
+                <span className="text-slate-900 font-bold">{activeCreatedLot.weightKg} kg @ ₹{activeCreatedLot.ratePerKg}/kg</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">{t.estimatedPayout}</span>
-                {activeCreatedLot.ratePerKg === 0 && activeCreatedLot.materialName === 'Other E-waste' ? (
-                  <span className="font-extrabold text-base text-amber-700 flex items-center gap-1">
-                    <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-lg border border-amber-300 text-xs font-black tracking-wide">
-                      {language === 'hi' ? 'निर्धारित नहीं' : language === 'mr' ? 'निश्चित नाही' : 'NOT DEFINED'}
-                    </span>
-                  </span>
-                ) : (
-                  <span className="text-emerald-700 font-extrabold text-base">₹{activeCreatedLot.totalAmount}</span>
-                )}
+                <span className="text-emerald-700 font-extrabold text-base">₹{activeCreatedLot.totalAmount}</span>
               </div>
               <div className="flex justify-between border-t border-slate-200 pt-1.5">
                 <span className="text-slate-500">{t.matchedRecycler}:</span>
@@ -1702,48 +1740,38 @@ export const CollectorMobileApp: React.FC = () => {
               </div>
             </div>
 
-            {/* Direct button to open live order status & payout page */}
-            <button
-              type="button"
-              onClick={() => {
-                setShowQrModal(false);
-                setActivePublicOrderId(activeCreatedLot.id);
-              }}
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl shadow-md cursor-pointer text-xs flex items-center justify-center gap-2 mb-2 transition-transform active:scale-98"
-            >
-              <ExternalLink className="w-4 h-4" />
-              <span>
-                {language === 'hi'
-                  ? 'लाइव ऑर्डर ट्रैकिंग व डायरेक्ट भुगतान पेज खोलें ↗'
-                  : language === 'mr'
-                  ? 'थेट ट्रॅकिंग व पेमेंट पेज उघडा ↗'
-                  : 'Open Live Order Tracking & Direct Payout Page ↗'}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowQrModal(false)}
-              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
-            >
-              {t.close}
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowQrModal(false);
+                  setActivePublicOrderId(activeCreatedLot.id);
+                }}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs cursor-pointer text-xs flex items-center justify-center gap-1.5"
+              >
+                <span>View Live Order Status Page ↗</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowQrModal(false)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl cursor-pointer text-xs"
+              >
+                {t.close}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {selectedGraphMaterial && (
-        <CollectorPriceGraphModal
-          material={selectedGraphMaterial}
-          isOpen={Boolean(selectedGraphMaterial)}
-          onClose={() => setSelectedGraphMaterial(null)}
-          language={language}
-          speak={speak}
-          onSelectForScan={(mat) => {
-            setSelectedMaterialId(mat.id);
-            setCustomCategoryName(mat.name_en);
-            setSelectedGraphMaterial(null);
-            setActiveTab('scan');
+      {/* New Order QR Code Popup on Pending / Orders Screen */}
+      {newOrderLotForModal && (
+        <NewOrderQrModal
+          lot={newOrderLotForModal}
+          isOpen={Boolean(newOrderLotForModal)}
+          onClose={() => setNewOrderLotForModal(null)}
+          onViewTrackingPage={(id) => {
+            setNewOrderLotForModal(null);
+            setActivePublicOrderId(id);
           }}
         />
       )}
@@ -1842,6 +1870,18 @@ export const CollectorMobileApp: React.FC = () => {
           </button>
         </nav>
       </div>
+
+      {/* CPCB 30-Day Statutory Price History Modal */}
+      {priceGraphLot && (
+        <LotPriceHistoryModal
+          isOpen={Boolean(priceGraphLot)}
+          onClose={() => setPriceGraphLot(null)}
+          lotName={priceGraphLot.name}
+          materialId={priceGraphLot.materialId}
+          currentRate={priceGraphLot.rate}
+          lotId={priceGraphLot.lotId}
+        />
+      )}
 
     </div>
   );

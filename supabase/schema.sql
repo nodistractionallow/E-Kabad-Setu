@@ -96,8 +96,55 @@ CREATE TABLE IF NOT EXISTS public.lots (
   weighbridge_weight_kg NUMERIC,
   final_payout_amount NUMERIC,
   epr_credit_kg NUMERIC,
+  is_out_of_category BOOLEAN DEFAULT false,
+  is_pending_category_approval BOOLEAN DEFAULT false,
+  requested_category_name TEXT,
+  paid_at TEXT,
+  paid_timestamp BIGINT,
+  settlement_utr TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4b. Category Requests Table
+CREATE TABLE IF NOT EXISTS public.category_requests (
+  id TEXT PRIMARY KEY,
+  category_name TEXT NOT NULL,
+  collector_name TEXT,
+  collector_phone TEXT,
+  description TEXT,
+  estimated_weight_kg NUMERIC,
+  photo_url TEXT,
+  lot_id TEXT,
+  status TEXT DEFAULT 'pending',
+  approved_rate_per_kg NUMERIC,
+  assigned_standard_category TEXT,
+  review_notes TEXT,
+  reviewed_by TEXT,
+  timestamp TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4c. Partner Registrations Table
+CREATE TABLE IF NOT EXISTS public.partner_registrations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT,
+  city TEXT,
+  state TEXT,
+  ward TEXT,
+  bank_upi TEXT,
+  tier TEXT,
+  facility_name TEXT,
+  company_name TEXT,
+  applied_date TEXT,
+  status TEXT DEFAULT 'PENDING_GOVT_APPROVAL',
+  approved_date TEXT,
+  approved_by TEXT,
+  assigned_cpcb_partner_id TEXT,
+  rejection_reason TEXT,
+  registered_by_authority_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 5. Transactions / Payouts Table
@@ -148,6 +195,9 @@ ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sync_audit_log ENABLE ROW LEVEL SECURITY;
 
+ALTER TABLE public.category_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.partner_registrations ENABLE ROW LEVEL SECURITY;
+
 -- Drop existing policies if they already exist so re-running is safe
 DROP POLICY IF EXISTS "Allow public all for collectors" ON public.collectors;
 DROP POLICY IF EXISTS "Allow public all for recyclers" ON public.recyclers;
@@ -156,6 +206,8 @@ DROP POLICY IF EXISTS "Allow public all for lots" ON public.lots;
 DROP POLICY IF EXISTS "Allow public all for transactions" ON public.transactions;
 DROP POLICY IF EXISTS "Allow public all for prices" ON public.prices;
 DROP POLICY IF EXISTS "Allow public all for sync_audit_log" ON public.sync_audit_log;
+DROP POLICY IF EXISTS "Allow public all for category_requests" ON public.category_requests;
+DROP POLICY IF EXISTS "Allow public all for partner_registrations" ON public.partner_registrations;
 
 -- Allow anonymous read & write for app operations & offline-first sync
 CREATE POLICY "Allow public all for collectors" ON public.collectors FOR ALL USING (true) WITH CHECK (true);
@@ -165,6 +217,8 @@ CREATE POLICY "Allow public all for lots" ON public.lots FOR ALL USING (true) WI
 CREATE POLICY "Allow public all for transactions" ON public.transactions FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow public all for prices" ON public.prices FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow public all for sync_audit_log" ON public.sync_audit_log FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public all for category_requests" ON public.category_requests FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public all for partner_registrations" ON public.partner_registrations FOR ALL USING (true) WITH CHECK (true);
 
 -- =================================================================================
 -- Enable Realtime Broadcast for Instant Multi-Device Sync

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { OnboardingGateway } from './components/OnboardingGateway';
 import { CollectorMobileApp } from './components/CollectorMobileApp';
@@ -8,42 +8,36 @@ import { PublicOrderTrackingView } from './components/PublicOrderTrackingView';
 
 const AppRouter: React.FC = () => {
   const { currentView, activePublicOrderId, setActivePublicOrderId, lots } = useApp();
-  const [trackingOrderId, setTrackingOrderId] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      return params.get('orderId') || params.get('lotId') || params.get('track');
-    }
-    return null;
-  });
 
+  // Check URL query param ?orderId=LOT-XXXX
   useEffect(() => {
-    const checkParams = () => {
+    try {
       const params = new URLSearchParams(window.location.search);
-      setTrackingOrderId(params.get('orderId') || params.get('lotId') || params.get('track'));
-    };
-    window.addEventListener('popstate', checkParams);
-    return () => window.removeEventListener('popstate', checkParams);
-  }, []);
+      const urlOrderId = params.get('orderId');
+      if (urlOrderId && !activePublicOrderId) {
+        setActivePublicOrderId(urlOrderId);
+      }
+    } catch {
+      // ignore
+    }
+  }, [activePublicOrderId, setActivePublicOrderId]);
 
-  const effectiveOrderId = activePublicOrderId || trackingOrderId;
-
-  if (effectiveOrderId) {
-    const matchedLot = lots.find((l) => l.id.toUpperCase() === effectiveOrderId.toUpperCase());
+  if (activePublicOrderId) {
+    const matchedLot = lots.find((l) => l.id.toUpperCase() === activePublicOrderId.toUpperCase());
     return (
       <PublicOrderTrackingView
-        orderId={effectiveOrderId}
+        orderId={activePublicOrderId}
         lot={matchedLot}
         onBackToApp={() => {
-          if (typeof window !== 'undefined') {
+          setActivePublicOrderId(null);
+          try {
             const url = new URL(window.location.href);
             url.searchParams.delete('orderId');
-            url.searchParams.delete('lotId');
-            url.searchParams.delete('track');
             url.searchParams.delete('view');
-            window.history.pushState({}, '', url.pathname);
+            window.history.replaceState({}, '', url.pathname);
+          } catch {
+            // ignore
           }
-          setTrackingOrderId(null);
-          setActivePublicOrderId(null);
         }}
       />
     );

@@ -2,11 +2,12 @@ import React, { useState, useMemo } from 'react';
 import { EWasteLot, CollectorProfile } from '../types';
 import { TablePagination } from './TablePagination';
 import { DigitalStampOverlay } from './DigitalStampOverlay';
+import { LotPriceHistoryModal } from './LotPriceHistoryModal';
 import { QRCodeSVG } from 'qrcode.react';
 import { playFeedbackChime } from '../utils/speech';
-import { useApp } from '../context/AppContext';
-import { getTrackingUrl } from '../utils/trackingUrl';
 import { parseDateTimeToMs } from '../utils/dateTime';
+import { getLiveTrackingUrl, VERCEL_BASE_URL } from '../utils/trackingUrl';
+import { useApp } from '../context/AppContext';
 import { 
   Package, 
   Clock, 
@@ -29,8 +30,7 @@ import {
   ChevronRight,
   ShieldCheck,
   Tag,
-  ExternalLink,
-  Ban
+  TrendingUp
 } from 'lucide-react';
 
 interface CollectorOrdersManagementProps {
@@ -49,6 +49,7 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
   onNavigateToScan
 }) => {
   const { setActivePublicOrderId } = useApp();
+
   // Folder sub-tab: 'pending' | 'completed' | 'quarantined'
   const [activeFolder, setActiveFolder] = useState<'pending' | 'completed' | 'quarantined'>('pending');
 
@@ -71,21 +72,8 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
 
   // Filter lots belonging to this collector
   const collectorLots = useMemo(() => {
-    const cId = (collector.id || '').trim().toLowerCase();
-    const cPhone = (collector.phone || '').trim();
-    const cName = (collector.name || '').trim().toLowerCase();
-
-    return lots.filter(l => {
-      const lId = (l.collectorId || '').trim().toLowerCase();
-      const lPhone = (l.collectorPhone || '').trim();
-      const lName = (l.collectorName || '').trim().toLowerCase();
-
-      return (cId && lId === cId) || 
-             (cPhone && lPhone === cPhone) || 
-             (cName && lName === cName) ||
-             (!lId || lId === 'collector' || lId === 'current');
-    });
-  }, [lots, collector.id, collector.phone, collector.name]);
+    return lots.filter(l => l.collectorId === collector.id || !l.collectorId || l.collectorName === collector.name);
+  }, [lots, collector.id, collector.name]);
 
   // Folder metrics
   const pendingLots = useMemo(() => {
@@ -120,8 +108,12 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
         return matchesCategory && matchesSearch;
       })
       .sort((a, b) => {
-        if (sortBy === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
-        if (sortBy === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
+        if (sortBy === 'date_desc') {
+          return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+        }
+        if (sortBy === 'date_asc') {
+          return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
+        }
         if (sortBy === 'mass_desc') return (b.weighbridgeWeightKg || b.weightKg) - (a.weighbridgeWeightKg || a.weightKg);
         if (sortBy === 'amount_desc') return (b.finalPayoutAmount || b.totalAmount) - (a.finalPayoutAmount || a.totalAmount);
         return 0;
@@ -487,12 +479,25 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                             <span>{declaredWeight} kg</span>
                           )}
                         </div>
-                        <div className="text-[10px] text-slate-500">
-                          ₹{lot.ratePerKg}/kg
-                        </div>
-                        <div className="text-xs font-extrabold text-emerald-700 mt-0.5">
-                          ₹{lotAmount.toLocaleString('en-IN')}
-                        </div>
+                        {lot.isOutOfCategory || lot.isPendingCategoryApproval ? (
+                          <>
+                            <div className="text-[10px] text-amber-700 font-semibold">
+                              Rate: CPCB TBD
+                            </div>
+                            <div className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded mt-0.5 inline-block">
+                              Price will be decided later
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-[10px] text-slate-500">
+                              ₹{lot.ratePerKg}/kg
+                            </div>
+                            <div className="text-xs font-extrabold text-emerald-700 mt-0.5">
+                              ₹{lotAmount.toLocaleString('en-IN')}
+                            </div>
+                          </>
+                        )}
                       </td>
 
                       {/* Column 4: Facility & Status */}
@@ -506,7 +511,12 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
 
                         {/* Status Badge */}
                         <div className="mt-1 flex flex-col gap-1">
-                          {lot.needsOnlineAiCategorization ? (
+                          {lot.isOutOfCategory || lot.isPendingCategoryApproval ? (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-400">
+                              <Clock className="w-2.5 h-2.5 text-amber-700 animate-pulse" />
+                              <span>CPCB Category Approval Pending</span>
+                            </span>
+                          ) : lot.needsOnlineAiCategorization ? (
                             <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-800 border border-cyan-300">
                               <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-ping"></span>
                               <span>Pending AI Classification</span>
@@ -538,20 +548,6 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                       {/* Column 5: Action Buttons */}
                       <td className="py-2.5 px-3 align-top text-right">
                         <div className="flex flex-col items-end gap-1">
-                          {/* Live Tracking & Payout Page Button */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              playFeedbackChime('beep');
-                              setActivePublicOrderId(lot.id);
-                            }}
-                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
-                            title="Open live order tracking & direct statutory payout page"
-                          >
-                            <ExternalLink className="w-3 h-3 text-white" />
-                            <span>Track & Pay ↗</span>
-                          </button>
-
                           {/* QR Gate Pass Button */}
                           <button
                             type="button"
@@ -778,10 +774,10 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
             </div>
 
             {/* High Contrast QR Code */}
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-3">
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-4">
               <div className="w-44 h-44 bg-white p-2 rounded-xl flex flex-col items-center justify-center relative border border-slate-200">
                 <QRCodeSVG
-                  value={getTrackingUrl(viewingQrLot.id)}
+                  value={getLiveTrackingUrl(viewingQrLot.id)}
                   size={160}
                   level={"H"}
                   includeMargin={false}
@@ -793,31 +789,27 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                   </div>
                 </div>
               </div>
-            </div>
-
-            {/* Live Web Tracking Link */}
-            <div className="mb-3 px-1">
-              <p className="text-[10px] text-slate-500">
-                Scan with smartphone camera or open tracking link:
+              <p className="text-[10px] text-emerald-800 font-mono font-bold mt-2">
+                {VERCEL_BASE_URL}
               </p>
-              <a
-                href={getTrackingUrl(viewingQrLot.id)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[10px] text-emerald-700 font-mono underline break-all hover:text-emerald-900 mt-0.5 inline-block"
-              >
-                {getTrackingUrl(viewingQrLot.id)}
-              </a>
             </div>
 
-            <div className="bg-slate-50 rounded-2xl p-3 text-left border border-slate-200 text-xs space-y-1.5 font-mono mb-3">
+            <div className="bg-slate-50 rounded-2xl p-3 text-left border border-slate-200 text-xs space-y-1.5 font-mono mb-4">
               <div className="flex justify-between">
                 <span className="text-slate-500">Weight & Rate:</span>
-                <span className="text-slate-900 font-bold">{viewingQrLot.weightKg} kg @ ₹{viewingQrLot.ratePerKg}/kg</span>
+                <span className="text-slate-900 font-bold">
+                  {viewingQrLot.isOutOfCategory || viewingQrLot.isPendingCategoryApproval
+                    ? `${viewingQrLot.weightKg} kg (CPCB Tariff Pending)`
+                    : `${viewingQrLot.weightKg} kg @ ₹${viewingQrLot.ratePerKg}/kg`}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Declared Valuation:</span>
-                <span className="text-emerald-700 font-extrabold">₹{viewingQrLot.totalAmount}</span>
+                <span className="text-amber-800 font-extrabold">
+                  {viewingQrLot.isOutOfCategory || viewingQrLot.isPendingCategoryApproval
+                    ? 'Price will be decided later'
+                    : `₹${viewingQrLot.totalAmount}`}
+                </span>
               </div>
               <div className="flex justify-between border-t border-slate-200 pt-1">
                 <span className="text-slate-500">Destination:</span>
@@ -825,27 +817,26 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
               </div>
             </div>
 
-            {/* Direct button to open live order status & payout page */}
-            <button
-              type="button"
-              onClick={() => {
-                const targetLotId = viewingQrLot.id;
-                setViewingQrLot(null);
-                setActivePublicOrderId(targetLotId);
-              }}
-              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl shadow-md cursor-pointer text-xs flex items-center justify-center gap-1.5 mb-2 transition-transform active:scale-98"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Open Live Tracking & Direct Payout Page ↗</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setViewingQrLot(null)}
-              className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
-            >
-              Close Pass
-            </button>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const targetId = viewingQrLot.id;
+                  setViewingQrLot(null);
+                  setActivePublicOrderId(targetId);
+                }}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span>View Live Order Status Page ↗</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingQrLot(null)}
+                className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                Close Pass
+              </button>
+            </div>
           </div>
         </div>
       )}
