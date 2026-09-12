@@ -106,6 +106,7 @@ export interface RecyclerFacility {
   cpcbId: string;
   statePcb: string;
   location: string;
+  city?: string;
   monthlyQuotaTons: number;
   processedThisMonthTons: number;
   activeCollectors: number;
@@ -141,6 +142,12 @@ export interface TransactionRecord {
   facilityId?: string;
   facilityName?: string;
   authorityCode?: string;
+  authorityId?: string;
+  vendorId?: string;
+  vendorName?: string;
+  statePcb?: string;
+  paymentStatus?: string;
+  category?: string;
   materialCategory: string;
   materialName: string;
   weightKg: number;
@@ -150,8 +157,11 @@ export interface TransactionRecord {
   netDisbursed: number;
   paymentMode: 'UPI' | 'NEFT' | 'CASH' | 'ESCROW';
   utrNumber: string;
+  settlementUtr?: string;
   status: 'SETTLED' | 'PROCESSING' | 'FLAGGED';
   timestamp: string;
+  date?: string;
+  gpsCoordinates?: string;
 }
 
 export interface MaterialPriceTrend {
@@ -165,15 +175,51 @@ export interface MaterialPriceTrend {
   low7d: number;
   lmeBenchmarkUsdPerTon: number;
   lastRevisionDate: string;
+  materialId?: string;
+  materialName?: string;
+  materialName_hi?: string;
+  history7d?: any[];
+  history30d?: any[];
+  history90d?: any[];
+  history1y?: any[];
+  trend30dPct?: number;
+  category?: string;
 }
 
 export interface LotPricePoint {
   date: string;
-  pcbHigh: number;
-  copperWire: number;
-  battery: number;
-  magnet: number;
-  plastic: number;
+  pcbHigh?: number;
+  copperWire?: number;
+  battery?: number;
+  magnet?: number;
+  plastic?: number;
+  cpcbRate?: number;
+  marketSpotRate?: number;
+  [key: string]: any;
+}
+
+export interface AuthSession {
+  isLoggedIn: boolean;
+  role: UserRole;
+  user?: {
+    id?: string;
+    name?: string;
+    phone?: string;
+    cpcbId?: string;
+    [key: string]: any;
+  };
+  loginTime?: number;
+}
+
+export interface RecycledRecord {
+  id: string;
+  lotId?: string;
+  transactionData: TransactionRecord;
+  deletedAt: number; // timestamp in ms
+  retentionDays: number; // mandatory 12 days
+  expiresAt: number; // deletedAt + 12 * 86400000
+  deletedByKey: string;
+  originalLotData?: EWasteLot;
 }
 
 export interface CategoryApprovalRequest {

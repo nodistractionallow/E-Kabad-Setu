@@ -4,6 +4,7 @@ import { Language, MaterialItem } from '../types';
 import { AI_CLASSIFICATION_PRESETS, SAFETY_PRACTICES } from '../data/mockData';
 import { playFeedbackChime } from '../utils/speech';
 import { AiMandiInsightsModal } from './AiMandiInsightsModal';
+import { CollectorPriceGraphModal } from './CollectorPriceGraphModal';
 import { LiveCameraViewfinder } from './LiveCameraViewfinder';
 import { CollectorOrdersManagement } from './CollectorOrdersManagement';
 import { QRCodeSVG } from 'qrcode.react';
@@ -15,6 +16,7 @@ import {
   Volume2, 
   RefreshCw, 
   Camera, 
+  BarChart2,
   AlertTriangle, 
   AlertCircle,
   ShieldCheck, 
@@ -58,7 +60,8 @@ export const CollectorMobileApp: React.FC = () => {
     language, 
     setLanguage, 
     collector, 
-    setCurrentView, 
+    setCurrentView,
+    logout,
     materials, 
     lots, 
     addLot, 
@@ -96,6 +99,7 @@ export const CollectorMobileApp: React.FC = () => {
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'UPI' | 'CASH'>('ALL');
 
   const [selectedAiInsightsMaterial, setSelectedAiInsightsMaterial] = useState<MaterialItem | null>(null);
+  const [selectedGraphMaterial, setSelectedGraphMaterial] = useState<MaterialItem | null>(null);
 
   // On-Device TFLite Material Detection State
   const [detectionResult, setDetectionResult] = useState<MaterialDetectionResult | null>(null);
@@ -179,8 +183,7 @@ export const CollectorMobileApp: React.FC = () => {
   const triggerLiveAiClassification = async (base64OrUrl: string, options?: { bypassQualityGate?: boolean }) => {
     setIsAiClassifying(true);
     try {
-      // Run 100% on-device AI Material Detection (Quality Gate + Classifier)
-      const result = await materialDetectionService.detectMaterial(base64OrUrl, options);
+      const result = await materialDetectionService.detectMaterial(base64OrUrl, { ...options, language });
       setDetectionResult(result);
 
       if (result.status === 'rejected_quality') {
@@ -202,7 +205,20 @@ export const CollectorMobileApp: React.FC = () => {
         return;
       }
 
-      // result.status === 'valid_material'
+      if (result.status === 'offline_manual_selection') {
+        playFeedbackChime('beep');
+        const defaultCat = customCategoryName || 'Other E-waste';
+        selectCategory(defaultCat);
+        const speakMsg = language === 'hi'
+          ? 'ऑफलाइन मोड: कृपया नीचे से कबाड़ श्रेणी चुनें।'
+          : language === 'mr'
+          ? 'ऑफलाइन मोड: कृपया खालील यादीतून प्रवर्ग निवडा.'
+          : 'Offline mode: please select category from the dropdown.';
+        speak(speakMsg);
+        return;
+      }
+
+      // result.status === 'valid_material' (from Gemini)
       playFeedbackChime('beep');
       const categoryName = result.predictedCategory || 'Other E-waste';
       selectCategory(categoryName);
@@ -210,7 +226,7 @@ export const CollectorMobileApp: React.FC = () => {
       const speakMsg = language === 'hi' ? result.userMessageHi : result.userMessageEn;
       speak(speakMsg);
     } catch (err) {
-      console.error('Offline AI classification error:', err);
+      console.error('AI classification error:', err);
     } finally {
       setIsAiClassifying(false);
     }
@@ -290,7 +306,7 @@ export const CollectorMobileApp: React.FC = () => {
     const existingMat = materials.find(m => m.name_en.toLowerCase() === finalMaterialName.toLowerCase());
     let finalMaterialId = existingMat?.id || selectedMaterial.id;
 
-    addLot({
+    const createdLot = await addLot({
       collectorId: collector.id,
       collectorName: collector.name,
       collectorPhone: collector.phone,
@@ -321,6 +337,10 @@ export const CollectorMobileApp: React.FC = () => {
     setCustomRateOverride(null);
     setCustomCategoryName('');
     setCustomWeight(5.0);
+
+    // Set active lot and IMMEDIATELY trigger working QR Modal
+    setActiveCreatedLot(createdLot);
+    setShowQrModal(true);
 
     // Navigate to orders tab
     setActiveTab('orders');
@@ -869,57 +889,7 @@ export const CollectorMobileApp: React.FC = () => {
                   </div>
                 )}
 
-                {/* 2. QUALITY REJECTION: BLURRY */}
-                {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'BLURRY' && (
-                  <div className="bg-slate-900 border-2 border-amber-500/80 rounded-2xl p-4 text-amber-100 shadow-md flex items-start gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center shrink-0">
-                      <EyeOff className="w-6 h-6" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-mono text-amber-400 font-bold uppercase tracking-wider">
-                          {language === 'hi' ? '⚠️ अस्वीकृत: फोटो धुंधला है' : '⚠️ REJECTED: PHOTO BLURRY'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            playFeedbackChime('warning');
-                            speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
-                          }}
-                          className="text-amber-300 hover:text-amber-100 p-1 cursor-pointer"
-                          title="Listen to instruction"
-                        >
-                          <Volume2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <div className="text-sm font-bold text-white mt-0.5">
-                        {detectionResult.userMessageEn}
-                      </div>
-                      <div className="text-xs text-amber-200 mt-0.5 font-medium">
-                        {detectionResult.userMessageHi}
-                      </div>
-                      <div className="text-[11px] text-amber-400/80 font-mono mt-1.5">
-                        Edge Sharpness: {detectionResult.qualityMetrics?.blurScore ?? 18} (Required ≥ 22)
-                      </div>
-                      <div className="mt-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (livePhoto) {
-                              triggerLiveAiClassification(livePhoto, { bypassQualityGate: true });
-                            }
-                          }}
-                          className="px-3.5 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
-                        >
-                          <Zap className="w-3.5 h-3.5 fill-current" />
-                          <span>{language === 'hi' ? 'फिर भी स्कैन करें' : 'Scan Photo Anyway'}</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 3. QUALITY REJECTION: HUMAN FACE DETECTED */}
+                {/* 2. QUALITY REJECTION: HUMAN FACE DETECTED */}
                 {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'FACE_DETECTED' && (
                   <div className="bg-rose-950 border-2 border-rose-500 rounded-2xl p-4 text-rose-100 shadow-md flex items-start gap-3.5">
                     <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 flex items-center justify-center shrink-0">
@@ -928,7 +898,7 @@ export const CollectorMobileApp: React.FC = () => {
                     <div className="flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[11px] font-mono text-rose-300 font-bold uppercase tracking-wider">
-                          {language === 'hi' ? '⚠️ चेतावनी: मानव चेहरा पाया गया' : '⚠️ NOTICE: HUMAN FACE DETECTED'}
+                          {language === 'hi' ? '⚠️ अस्वीकृत: मानव चेहरा पाया गया' : '⚠️ REJECTED: HUMAN FACE DETECTED'}
                         </span>
                         <button
                           type="button"
@@ -949,7 +919,7 @@ export const CollectorMobileApp: React.FC = () => {
                         {detectionResult.userMessageHi}
                       </div>
                       <div className="text-[11px] text-rose-300/80 mt-1 font-semibold">
-                        {language === 'hi' ? 'गोपनीयता नियम: यदि आप कबाड़ पकड़े हुए हैं, तो नीचे बटन दबाकर स्कैन पूरा करें।' : 'Privacy rule: If you are holding scrap in front of camera, proceed below.'}
+                        {language === 'hi' ? 'कृपया केवल कबाड़ हार्डवेयर के सामने कैमरा रखें।' : 'Privacy rule: Please frame electronic scrap hardware only.'}
                       </div>
                       <div className="mt-3 flex items-center gap-2">
                         <button
@@ -962,67 +932,41 @@ export const CollectorMobileApp: React.FC = () => {
                           className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
                         >
                           <Zap className="w-3.5 h-3.5 fill-current" />
-                          <span>{language === 'hi' ? 'यह कबाड़ है — स्कैन जारी रखें' : 'Scan Scrap Hardware Anyway'}</span>
+                          <span>{language === 'hi' ? 'यह कबाड़ है — फिर भी आगे बढ़ें' : 'Proceed with Manual Category'}</span>
                         </button>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* 4. QUALITY REJECTION: NO OBJECT DETECTED */}
-                {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'NO_OBJECT' && (
-                  <div className="bg-slate-900 border-2 border-slate-700 rounded-2xl p-4 text-slate-200 shadow-md flex items-start gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-600 text-slate-400 flex items-center justify-center shrink-0">
-                      <PackageX className="w-6 h-6" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-mono text-slate-400 font-bold uppercase tracking-wider">
-                          {language === 'hi' ? '⚠️ अस्वीकृत: कोई कबाड़ नहीं दिखा' : '⚠️ REJECTED: NO SCRAP DETECTED'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            playFeedbackChime('warning');
-                            speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
-                          }}
-                          className="text-slate-300 hover:text-white p-1 cursor-pointer"
-                          title="Listen to instruction"
-                        >
-                          <Volume2 className="w-4 h-4" />
-                        </button>
+                {/* 3. OFFLINE MANUAL SELECTION NOTICE CARD */}
+                {detectionResult?.status === 'offline_manual_selection' && (
+                  <div className="bg-sky-950 border-2 border-sky-500/80 rounded-2xl p-4 text-white shadow-md flex items-center justify-between gap-3 animate-fadeIn">
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <div className="w-11 h-11 rounded-xl bg-sky-500/20 border border-sky-400/50 text-sky-300 flex items-center justify-center shrink-0">
+                        <WifiOff className="w-6 h-6 text-sky-400" />
                       </div>
-                      <div className="text-sm font-bold text-white mt-0.5">
-                        {detectionResult.userMessageEn}
-                      </div>
-                      <div className="text-xs text-slate-300 mt-0.5 font-medium">
-                        {detectionResult.userMessageHi}
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-1">
-                        {language === 'hi' ? 'खाली सतह या दीवार की फोटो अस्वीकृत की जाती है।' : 'Flat empty surface or background detected. Please focus on scrap.'}
-                      </div>
-                      <div className="mt-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (livePhoto) {
-                              triggerLiveAiClassification(livePhoto, { bypassQualityGate: true });
-                            }
-                          }}
-                          className="px-3.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
-                        >
-                          <Zap className="w-3.5 h-3.5 fill-current" />
-                          <span>{language === 'hi' ? 'कबाड़ का विश्लेषण करें' : 'Analyze Scrap Anyway'}</span>
-                        </button>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1">
+                            <span>{language === 'hi' ? 'ऑफलाइन मोड' : 'OFFLINE MODE'}</span>
+                          </span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold bg-sky-900/90 text-sky-200">
+                            {language === 'hi' ? 'मैनुअल चयन' : 'Manual Select'}
+                          </span>
+                        </div>
+                        <div className="text-base font-bold text-white truncate mt-0.5">
+                          {customCategoryName || 'Other E-waste'}
+                        </div>
+                        <div className="text-xs text-sky-200 font-medium">
+                          {language === 'hi' ? 'फोटो पास हुई। कृपया दाईं ओर से कबाड़ श्रेणी चुनें।' : 'Photo checks passed. Please select scrap category from right panel.'}
+                        </div>
                       </div>
                     </div>
                   </div>
                 )}
 
-
-
-
-                {/* 6. AI SUCCESS DETECTION SUMMARY BADGE */}
+                {/* 4. ONLINE AI SUCCESS (GEMINI VISION) */}
                 {detectionResult?.status === 'valid_material' && (
                   <div className={`border-2 rounded-2xl p-4 text-white shadow-md flex items-center justify-between gap-3 animate-fadeIn ${
                     detectionResult.isAutoClassifiedOther
@@ -1042,16 +986,18 @@ export const CollectorMobileApp: React.FC = () => {
                           <span className={`text-[11px] font-mono font-bold uppercase tracking-wider flex items-center gap-1 ${
                             detectionResult.isAutoClassifiedOther ? 'text-amber-400' : 'text-emerald-400'
                           }`}>
-                            <Zap className="w-3 h-3 fill-current" />
-                            <span>{detectionResult.isAutoClassifiedOther ? 'AUTO-CLASSIFIED' : 'ON-DEVICE DETECTED'}</span>
+                            <Sparkles className="w-3 h-3 fill-current" />
+                            <span>{detectionResult.isAutoClassifiedOther ? 'OTHER E-WASTE' : 'GEMINI AI CLASSIFIED'}</span>
                           </span>
-                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
-                            detectionResult.isAutoClassifiedOther
-                              ? 'bg-amber-800/90 text-amber-100'
-                              : 'bg-emerald-800/90 text-emerald-100'
-                          }`}>
-                            {detectionResult.isAutoClassifiedOther ? 'Unclear →' : ''} {detectionResult.confidenceScore}% conf
-                          </span>
+                          {detectionResult.confidenceScore ? (
+                            <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
+                              detectionResult.isAutoClassifiedOther
+                                ? 'bg-amber-800/90 text-amber-100'
+                                : 'bg-emerald-800/90 text-emerald-100'
+                            }`}>
+                              {detectionResult.confidenceScore}% conf
+                            </span>
+                          ) : null}
                         </div>
                         <div className="text-base font-bold text-white truncate mt-0.5">
                           {detectionResult.predictedCategory}
@@ -1061,7 +1007,7 @@ export const CollectorMobileApp: React.FC = () => {
                         </div>
                         {!detectionResult.isAutoClassifiedOther && (
                           <div className="text-xs text-emerald-300 font-semibold mt-0.5">
-                            {detectionResult.grade || 'Standard Grade'} • Rate: ₹{detectionResult.suggestedRatePerKg}/kg
+                            {detectionResult.grade || 'Standard CPCB Grade'} • Rate: ₹{detectionResult.suggestedRatePerKg}/kg
                           </div>
                         )}
                         {detectionResult.isAutoClassifiedOther && (

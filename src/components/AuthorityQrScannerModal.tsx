@@ -53,6 +53,17 @@ export const AuthorityQrScannerModal: React.FC<AuthorityQrScannerModalProps> = (
     if (!rawText) return null;
     const clean = rawText.trim();
 
+    // Check if JSON payload (e.g. from app QR codes)
+    try {
+      if (clean.startsWith('{') && clean.endsWith('}')) {
+        const parsed = JSON.parse(clean);
+        if (parsed.lotId) return String(parsed.lotId).toUpperCase();
+        if (parsed.id) return String(parsed.id).toUpperCase();
+      }
+    } catch {
+      // ignore json parse error
+    }
+
     // Check for standard URL query param: ?orderId=LOT-XXXX
     try {
       if (clean.includes('orderId=')) {

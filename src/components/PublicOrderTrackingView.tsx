@@ -21,6 +21,7 @@ import {
   Zap,
   CheckCheck
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { EWasteLot } from '../types';
 import { playFeedbackChime } from '../utils/speech';
 import { getLiveTrackingUrl, VERCEL_DOMAIN, VERCEL_BASE_URL } from '../utils/trackingUrl';
@@ -607,11 +608,15 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
 
             {/* Small QR Code seal */}
             <div className="flex flex-col items-center justify-center p-3 bg-slate-50 border border-slate-200 rounded-2xl shrink-0 self-start md:self-auto">
-              <img 
-                src={qrCodeImgSrc} 
-                alt="Order QR Code" 
-                className="w-24 h-24 object-contain rounded-lg border border-slate-200 bg-white p-1" 
-              />
+              <div className="w-24 h-24 flex items-center justify-center rounded-lg border border-slate-200 bg-white p-1">
+                <QRCodeSVG
+                  value={liveTrackingUrl}
+                  size={84}
+                  level="H"
+                  includeMargin={false}
+                  fgColor="#022c22"
+                />
+              </div>
               <span className="text-[10px] font-mono text-slate-500 mt-1">Live Manifest QR</span>
             </div>
           </div>

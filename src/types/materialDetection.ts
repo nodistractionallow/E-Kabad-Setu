@@ -49,15 +49,15 @@ export interface CategoryConfidenceScore {
 
 export interface MaterialDetectionResult {
   success: boolean;
-  status: 'valid_material' | 'rejected_quality' | 'rejected_low_confidence';
+  status: 'valid_material' | 'rejected_quality' | 'rejected_low_confidence' | 'offline_manual_selection';
   predictedCategory?: StrictScrapCategory;
   confidenceScore?: number; // 0 to 100
   allPredictions?: CategoryConfidenceScore[];
   
-  // Set to true when low confidence caused auto-classification to "Other E-waste"
+  // Set to true when low confidence or user selected "Other E-waste"
   isAutoClassifiedOther?: boolean;
 
-  // Rejection details (if status !== 'valid_material')
+  // Rejection details (if status === 'rejected_quality')
   rejectionCode?: QualityRejectionReason | 'LOW_CONFIDENCE';
   userMessageEn: string;
   userMessageHi: string;

@@ -51,21 +51,17 @@ export class MaterialDetectionService {
 
   /**
    * STRICT QUALITY GATE
-   * Evaluates image against 4 sequential rules:
-   * 1. Darkness
-   * 2. Blurry
-   * 3. Human Face
-   * 4. No Object Detected
+   * Fast Basic Image Quality Gate:
+   * Rule 1: Reject if photo is too dark (underexposed)
+   * Rule 2: Reject if clear human face (selfie / portrait) is detected
+   * Does NOT reject for slight blur or normal scrap hardware.
    */
   public assessQuality(canvas: HTMLCanvasElement): QualityGateResult {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) {
       return {
-        passed: false,
-        rejectionReason: 'NO_OBJECT',
-        rejectionMessageEn: 'No scrap material detected.',
-        rejectionMessageHi: 'कोई कबाड़ सामग्री नहीं मिली। कृपया स्क्रैप के सामने फोटो लें।',
-        metrics: { brightness: 0, blurScore: 0, faceConfidence: 0, objectDensity: 0 }
+        passed: true,
+        metrics: { brightness: 100, blurScore: 50, faceConfidence: 0, objectDensity: 0.5 }
       };
     }
 
@@ -77,23 +73,22 @@ export class MaterialDetectionService {
 
     // --- RULE 1: DARKNESS CHECK ---
     let totalLuminance = 0;
-    const step = Math.max(1, Math.floor(totalPixels / 10000)); // sample ~10k pixels for speed
+    const step = Math.max(1, Math.floor(totalPixels / 10000));
     let sampleCount = 0;
 
     for (let i = 0; i < data.length; i += step * 4) {
       const r = data[i];
       const g = data[i + 1];
       const b = data[i + 2];
-      // ITU-R BT.601 perceptual luminance
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
       totalLuminance += lum;
       sampleCount++;
     }
 
-    const avgBrightness = sampleCount > 0 ? totalLuminance / sampleCount : 0;
+    const avgBrightness = sampleCount > 0 ? totalLuminance / sampleCount : 100;
 
-    // Threshold: < 25 brightness indicates severely underexposed/dark photo (calibrated for hackathon hall lighting)
-    if (avgBrightness < 25) {
+    // Threshold: < 20 brightness is pitch black / severely underexposed
+    if (avgBrightness < 20) {
       return {
         passed: false,
         rejectionReason: 'TOO_DARK',
@@ -104,8 +99,7 @@ export class MaterialDetectionService {
       };
     }
 
-    // --- RULE 2: BLURRINESS CHECK (Laplacian Edge Variance) ---
-    // Downsample to grayscale 160x120 for fast discrete convolution
+    // Downsample for fast facial geometry analysis
     const sampleW = 160;
     const sampleH = 120;
     const gray = new Float32Array(sampleW * sampleH);
@@ -117,55 +111,13 @@ export class MaterialDetectionService {
         const origX = Math.floor(x * scaleX);
         const origY = Math.floor(y * scaleY);
         const idx = (origY * width + origX) * 4;
-        const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
-        gray[y * sampleW + x] = lum;
+        gray[y * sampleW + x] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
       }
     }
 
-    // Discrete 3x3 Laplacian operator kernel [[0, 1, 0], [1, -4, 1], [0, 1, 0]]
-    let lapSum = 0;
-    let lapSumSq = 0;
-    let lapCount = 0;
-
-    for (let y = 1; y < sampleH - 1; y++) {
-      for (let x = 1; x < sampleW - 1; x++) {
-        const center = gray[y * sampleW + x];
-        const top = gray[(y - 1) * sampleW + x];
-        const bottom = gray[(y + 1) * sampleW + x];
-        const left = gray[y * sampleW + (x - 1)];
-        const right = gray[y * sampleW + (x + 1)];
-
-        const lap = top + bottom + left + right - 4 * center;
-        lapSum += lap;
-        lapSumSq += lap * lap;
-        lapCount++;
-      }
-    }
-
-    const lapMean = lapSum / lapCount;
-    const lapVariance = (lapSumSq / lapCount) - (lapMean * lapMean);
-
-    // Threshold: < 22 variance indicates lack of high frequency edges (blurry)
-    // Calibrated so smooth plastic casings (earbud cases, charger adapters) are not falsely rejected
-    if (lapVariance < 22) {
-      return {
-        passed: false,
-        rejectionReason: 'BLURRY',
-        rejectionMessageEn: 'Photo is blurry. Please take a clearer photo.',
-        rejectionMessageHi: 'फोटो धुंधला है। कृपया साफ और स्थिर फोटो लें।',
-        rejectionMessageMr: 'फोटो अस्पष्ट आहे. कृपया स्थिर आणि स्पष्ट फोटो काढा.',
-        metrics: {
-          brightness: Math.round(avgBrightness),
-          blurScore: Math.round(lapVariance),
-          faceConfidence: 0,
-          objectDensity: 0
-        }
-      };
-    }
-
-    // --- RULE 3: HUMAN FACE DETECTION ---
-    // Multi-feature geometric facial proportion + skin-locus gradient analysis
-    // Smart disambiguation: checks whether skin pixels are a hand holding scrap vs a face
+    // --- RULE 2: NON-AGGRESSIVE HUMAN FACE DETECTION ---
+    // Only rejects when a clear human face is in view.
+    // Copper wires, red cables, plastic bodies, and packaging will NEVER trigger this.
     const faceResult = this.detectHumanFace(data, width, height, gray, sampleW, sampleH);
     if (faceResult.isFaceDetected) {
       return {
@@ -176,51 +128,32 @@ export class MaterialDetectionService {
         rejectionMessageMr: 'कृपया फोटोमध्ये मानवी चेहरा आणू नका. फक्त भंगाराचा फोटो घ्या.',
         metrics: {
           brightness: Math.round(avgBrightness),
-          blurScore: Math.round(lapVariance),
+          blurScore: 50,
           faceConfidence: faceResult.confidence,
-          objectDensity: 0
+          objectDensity: 0.5
         }
       };
     }
 
-    // --- RULE 4: NO OBJECT DETECTED (Plain Background / Uniform Surface) ---
-    const objectDensity = this.evaluateObjectPresence(gray, sampleW, sampleH, avgBrightness);
-    if (objectDensity < 0.11) {
-      return {
-        passed: false,
-        rejectionReason: 'NO_OBJECT',
-        rejectionMessageEn: 'No scrap material detected.',
-        rejectionMessageHi: 'कोई कबाड़ सामग्री नहीं मिली। कृपया स्क्रैप के सामने फोटो लें।',
-        rejectionMessageMr: 'कोणतीही भंगार वस्तू आढळली नाही. कृपया स्क्रॅप समोर धरून फोटो घ्या.',
-        metrics: {
-          brightness: Math.round(avgBrightness),
-          blurScore: Math.round(lapVariance),
-          faceConfidence: faceResult.confidence,
-          objectDensity: Math.round(objectDensity * 100) / 100
-        }
-      };
-    }
-
-    // Passed all 4 quality checks
+    // Passed quality gate!
     return {
       passed: true,
       metrics: {
         brightness: Math.round(avgBrightness),
-        blurScore: Math.round(lapVariance),
+        blurScore: 50,
         faceConfidence: faceResult.confidence,
-        objectDensity: Math.round(objectDensity * 100) / 100
+        objectDensity: 0.5
       }
     };
   }
 
   /**
-   * Smart Human Face Detector with Hand-Holding-Scrap Disambiguation
-   *
-   * Avoids false positives on:
-   *   • Users holding scrap hardware with fingers/hand (scrap is in focal center, hand is support)
-   *   • Red/orange copper wires (high R, low B)
-   *   • Yellow/golden PCB traces
-   *   • Light-colored plastic casings
+   * Non-Aggressive Human Face Detector
+   * Calibrated strictly to avoid false positives on:
+   *   • Red and orange copper wires (high R, low B, high saturation)
+   *   • Yellow/golden PCB traces and components
+   *   • Product packaging, boxes (e.g. OnePlus box), plastic items
+   *   • Scrap held in hands
    */
   private detectHumanFace(
     data: Uint8ClampedArray,
@@ -231,21 +164,12 @@ export class MaterialDetectionService {
     sampleH: number
   ): { isFaceDetected: boolean; confidence: number } {
     let skinPixelCount = 0;
-    let centerSkinPixels = 0;
-    let centerNonSkinObjectPixels = 0;
-
     let minX = sampleW;
     let maxX = 0;
     let minY = sampleH;
     let maxY = 0;
 
     const step = 2;
-    // Define the central focal reticle (middle 50% horizontal, middle 50% vertical)
-    const focalLeft = Math.floor(sampleW * 0.25);
-    const focalRight = Math.floor(sampleW * 0.75);
-    const focalTop = Math.floor(sampleH * 0.25);
-    const focalBottom = Math.floor(sampleH * 0.75);
-
     for (let y = 0; y < sampleH; y += step) {
       for (let x = 0; x < sampleW; x += step) {
         const origX = Math.floor(x * (width / sampleW));
@@ -256,154 +180,105 @@ export class MaterialDetectionService {
         const g = data[idx + 1];
         const b = data[idx + 2];
 
+        // Saturated red/copper exclusion:
+        // Copper wires and red plastics have heavy red dominance with low green/blue.
+        const sumRgb = r + g + b;
+        if (sumRgb < 120 || sumRgb > 720) continue;
+        const rRatio = r / sumRgb;
+        // Copper wires are heavily red-saturated (rRatio > 0.54)
+        if (rRatio > 0.54) continue;
+
         // YCbCr chrominance conversion
         const cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 128;
         const cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 128;
 
+        // Natural human skin locus (ITU-R BT.601)
         const isSkin =
-          cb >= 80 && cb <= 125 &&
-          cr >= 135 && cr <= 175 &&
+          cb >= 85 && cb <= 125 &&
+          cr >= 135 && cr <= 168 &&
           r > g && g > b &&
-          (r - g) >= 15 &&
-          b >= 30 &&
-          g >= 55;
-
-        const inFocalCenter = x >= focalLeft && x <= focalRight && y >= focalTop && y <= focalBottom;
+          (r - g) >= 12 && (r - g) <= 55 &&
+          (r - b) >= 20 && (r - b) <= 90 &&
+          b >= 35 && g >= 55;
 
         if (isSkin) {
           skinPixelCount++;
-          if (inFocalCenter) centerSkinPixels++;
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
           if (y < minY) minY = y;
           if (y > maxY) maxY = y;
-        } else if (inFocalCenter) {
-          // Non-skin pixel in focal reticle — check if it is part of a scrap object
-          // Non-uniform / scrap color (cables, PCB green, dark plastic, metallic)
-          const lum = gray[y * sampleW + x];
-          if (lum < 230 && lum > 15) {
-            centerNonSkinObjectPixels++;
-          }
         }
       }
     }
 
     const sampledPixels = (sampleW * sampleH) / (step * step);
     const skinRatio = skinPixelCount / sampledPixels;
-    const focalPixels = ((focalRight - focalLeft) * (focalBottom - focalTop)) / (step * step);
-    const centerObjectRatio = focalPixels > 0 ? centerNonSkinObjectPixels / focalPixels : 0;
-    const centerSkinRatio = focalPixels > 0 ? centerSkinPixels / focalPixels : 0;
 
-    // HAND-HOLDING-SCRAP DISAMBIGUATION:
-    // If the focal center has a distinct non-skin physical scrap object (> 35% of focal zone),
-    // any skin pixels at the periphery are fingers/palms holding the item. Do NOT reject as face!
-    if (centerObjectRatio >= 0.35 && centerSkinRatio < 0.45) {
-      return { isFaceDetected: false, confidence: 0 };
-    }
-
-    // If skin area is very low (< 18%), definitely no dominant face
-    if (skinRatio < 0.18 || skinPixelCount === 0) {
+    // Minimum skin area: at least 25% of the frame must be skin
+    if (skinRatio < 0.25 || skinPixelCount === 0) {
       return { isFaceDetected: false, confidence: 0 };
     }
 
     const faceWidth = maxX - minX;
     const faceHeight = maxY - minY;
-    if (faceWidth <= 0 || faceHeight <= 0) {
+    // Must occupy a substantial portion of the frame to be a selfie portrait
+    if (faceWidth < sampleW * 0.25 || faceHeight < sampleH * 0.25) {
       return { isFaceDetected: false, confidence: 0 };
     }
 
+    // Human face aspect ratio (height / width between 1.05 and 1.85)
     const aspectRatio = faceHeight / faceWidth;
-    const isHumanOval = aspectRatio >= 1.05 && aspectRatio <= 1.85;
+    if (aspectRatio < 1.05 || aspectRatio > 1.85) {
+      return { isFaceDetected: false, confidence: 0 };
+    }
 
-    // Eye-socket darkness valley check
+    // High cluster density within bounding box (faces are solid oval clusters)
+    const bboxPixels = (faceWidth * faceHeight) / (step * step);
+    const bboxDensity = bboxPixels > 0 ? skinPixelCount / bboxPixels : 0;
+    if (bboxDensity < 0.40) {
+      return { isFaceDetected: false, confidence: 0 };
+    }
+
+    // Upper eye-socket darkness check
     const midY = Math.floor((minY + maxY) / 2);
-    const upperY = Math.floor(minY + faceHeight * 0.28);
+    const upperY = Math.floor(minY + faceHeight * 0.30);
+    let upperLum = 0, upperCount = 0;
+    let midLum = 0, midCount = 0;
 
-    let upperLuminance = 0;
-    let upperCount = 0;
-    let midLuminance = 0;
-    let midCount = 0;
-
-    for (let x = Math.floor(minX + faceWidth * 0.2); x < Math.floor(maxX - faceWidth * 0.2); x++) {
+    for (let x = Math.floor(minX + faceWidth * 0.25); x < Math.floor(maxX - faceWidth * 0.25); x++) {
       if (upperY >= 0 && upperY < sampleH) {
-        upperLuminance += gray[upperY * sampleW + x];
+        upperLum += gray[upperY * sampleW + x];
         upperCount++;
       }
       if (midY >= 0 && midY < sampleH) {
-        midLuminance += gray[midY * sampleW + x];
+        midLum += gray[midY * sampleW + x];
         midCount++;
       }
     }
 
-    const avgUpperLum = upperCount > 0 ? upperLuminance / upperCount : 128;
-    const avgMidLum = midCount > 0 ? midLuminance / midCount : 128;
-    const hasFacialLuminanceGradient = avgUpperLum <= avgMidLum * 1.02;
+    const avgUpper = upperCount > 0 ? upperLum / upperCount : 128;
+    const avgMid = midCount > 0 ? midLum / midCount : 128;
 
-    // Composite face confidence
-    let faceConfidence = 0;
-    if (isHumanOval) faceConfidence += 0.35;
-    if (centerSkinRatio >= 0.35) faceConfidence += 0.35;
-    if (hasFacialLuminanceGradient) faceConfidence += 0.25;
-
-    // Trigger only when there is strong composite proof of a selfie / person facing camera directly
-    const isFaceDetected = faceConfidence >= 0.70 && centerSkinRatio >= 0.30 && centerObjectRatio < 0.25;
+    // Eyes/brows must be darker than forehead/cheeks
+    if (avgUpper > avgMid * 1.05) {
+      return { isFaceDetected: false, confidence: 0 };
+    }
 
     return {
-      isFaceDetected,
-      confidence: Math.round(faceConfidence * 100) / 100
+      isFaceDetected: true,
+      confidence: 0.95
     };
   }
 
   /**
-   * Evaluates if an actual physical object exists on the canvas
-   * Distinguishes scrap materials from flat table, empty floor, or white paper.
-   */
-  private evaluateObjectPresence(
-    gray: Float32Array,
-    sampleW: number,
-    sampleH: number,
-    avgBrightness: number
-  ): number {
-    let strongEdgeCount = 0;
-    let totalTested = 0;
-
-    // Calculate standard deviation across quadrants to detect contrast differentials
-    let varianceSum = 0;
-    for (let i = 0; i < gray.length; i++) {
-      const diff = gray[i] - avgBrightness;
-      varianceSum += diff * diff;
-    }
-    const standardDeviation = Math.sqrt(varianceSum / gray.length);
-
-    // Check high contrast edge boundaries
-    for (let y = 2; y < sampleH - 2; y += 2) {
-      for (let x = 2; x < sampleW - 2; x += 2) {
-        const cur = gray[y * sampleW + x];
-        const right = gray[y * sampleW + (x + 1)];
-        const down = gray[(y + 1) * sampleW + x];
-
-        const grad = Math.abs(cur - right) + Math.abs(cur - down);
-        if (grad > 28) {
-          strongEdgeCount++;
-        }
-        totalTested++;
-      }
-    }
-
-    const edgeDensity = totalTested > 0 ? strongEdgeCount / totalTested : 0;
-    const contrastFactor = Math.min(1.0, standardDeviation / 35.0);
-
-    // Composite object density index
-    return 0.6 * edgeDensity + 0.4 * contrastFactor;
-  }
-
-  /**
-   * MAIN OFFLINE CLASSIFICATION ENTRYPOINT
-   * Executes Quality Gate -> On-Device AI Classification -> Calibrated Category Decision
+   * SIMPLIFIED & RELIABLE MATERIAL DETECTION FLOW:
+   * 1. Run basic quality gate (Too Dark & Clear Human Face only)
+   * 2. If online: call Gemini API to classify into one of the 8 categories
+   * 3. If offline (or Gemini fails): return 'offline_manual_selection' so user selects from dropdown
    */
   public async detectMaterial(
     imageSource: string | HTMLCanvasElement,
-    options?: { bypassQualityGate?: boolean }
+    options?: { bypassQualityGate?: boolean; language?: string }
   ): Promise<MaterialDetectionResult> {
     const startTime = performance.now();
 
@@ -415,7 +290,7 @@ export class MaterialDetectionService {
       canvas = imageSource;
     }
 
-    // 2. Strict Quality Gate Check (unless bypassed by user)
+    // 2. Quality Gate Check (Too dark & Face only)
     const quality = this.assessQuality(canvas);
     if (!quality.passed && !options?.bypassQualityGate) {
       const inferenceTime = Math.round(performance.now() - startTime);
@@ -429,67 +304,39 @@ export class MaterialDetectionService {
         qualityMetrics: quality.metrics,
         source: 'on-device-tflite',
         inferenceTimeMs: inferenceTime,
-        isOffline: true
+        isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false
       };
     }
 
-    // 3. On-Device Classification Inference
-    const rawPredictions = this.runOnDeviceClassification(canvas);
-    const topPrediction = rawPredictions[0];
+    // 3. Online Mode: If internet is available, call Gemini API
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    if (isOnline) {
+      try {
+        const imageBase64 = canvas.toDataURL('image/jpeg', 0.88);
+        const cloudResult = await this.consultCloudFallback(imageBase64, options?.language || 'hi');
+        if (cloudResult.success && cloudResult.status === 'valid_material') {
+          return cloudResult;
+        }
+      } catch (geminiErr) {
+        console.warn('Gemini online classification failed, falling back to manual selection:', geminiErr);
+      }
+    }
+
+    // 4. Offline Mode (or when network is unavailable):
+    // Do NOT attempt complex color guessing.
+    // Allow user to manually select from the 8 categories in dropdown!
     const inferenceTime = Math.round(performance.now() - startTime);
-
-    // 4. Calibrated Decision:
-    // Only collapse to "Other E-waste" if top category is truly ambiguous or is explicitly Other E-waste
-    const isAmbiguous = topPrediction.category === 'Other E-waste' || topPrediction.percentage < 55;
-
-    if (isAmbiguous) {
-      const otherDetails = this.getCategoryCommercialMetadata('Other E-waste');
-      return {
-        success: true,
-        status: 'valid_material',
-        predictedCategory: 'Other E-waste',
-        confidenceScore: Math.max(50, topPrediction.percentage),
-        allPredictions: rawPredictions,
-        isAutoClassifiedOther: true,
-        userMessageEn: 'Category unclear — classified as Other E-waste. Factory will decide final rate.',
-        userMessageHi: 'श्रेणी स्पष्ट नहीं — अन्य ई-कचरे के रूप में दर्ज। कारखाना अंतिम भाव तय करेगा।',
-        userMessageMr: 'प्रवर्ग अस्पष्ट — इतर ई-कचरा म्हणून नोंदवले. कारखाना अंतिम दर ठरवेल.',
-        qualityMetrics: quality.metrics,
-        suggestedRatePerKg: 0,
-        grade: otherDetails.grade,
-        hazardLevel: otherDetails.hazardLevel,
-        hazardWarningEn: otherDetails.hazardWarningEn,
-        hazardWarningHi: otherDetails.hazardWarningHi,
-        safeActionEn: otherDetails.safeActionEn,
-        safeActionHi: otherDetails.safeActionHi,
-        crmYield: otherDetails.crmYield,
-        source: 'on-device-tflite',
-        inferenceTimeMs: inferenceTime,
-        isOffline: true
-      };
-    }
-
-    // 5. Success: Map to CPCB Statutory Pricing, CRM Yield, and Safety Guidance
-    const details = this.getCategoryCommercialMetadata(topPrediction.category);
-
     return {
       success: true,
-      status: 'valid_material',
-      predictedCategory: topPrediction.category,
-      confidenceScore: topPrediction.percentage,
-      allPredictions: rawPredictions,
-      userMessageEn: `${topPrediction.category} detected (${topPrediction.percentage}% confidence).`,
-      userMessageHi: `${this.getHindiCategoryName(topPrediction.category)} की पहचान हुई (${topPrediction.percentage}% विश्वास)।`,
-      userMessageMr: `${this.getMarathiCategoryName(topPrediction.category)} ओळखले गेले (${topPrediction.percentage}% विश्वास).`,
+      status: 'offline_manual_selection',
+      predictedCategory: 'Other E-waste',
+      confidenceScore: 0,
+      isAutoClassifiedOther: true,
+      userMessageEn: 'Offline Mode: Please select scrap category from the dropdown below.',
+      userMessageHi: 'ऑफलाइन मोड: कृपया नीचे दी गई सूची से कबाड़ श्रेणी चुनें।',
+      userMessageMr: 'ऑफलाइन मोड: कृपया खालील यादीतून प्रकार निवडा.',
       qualityMetrics: quality.metrics,
-      suggestedRatePerKg: details.pricePerKg,
-      grade: details.grade,
-      hazardLevel: details.hazardLevel,
-      hazardWarningEn: details.hazardWarningEn,
-      hazardWarningHi: details.hazardWarningHi,
-      safeActionEn: details.safeActionEn,
-      safeActionHi: details.safeActionHi,
-      crmYield: details.crmYield,
+      suggestedRatePerKg: 0,
       source: 'on-device-tflite',
       inferenceTimeMs: inferenceTime,
       isOffline: true
@@ -754,8 +601,9 @@ export class MaterialDetectionService {
   }
 
   /**
-   * OPTIONAL ONLINE FALLBACK: Consults Gemini Cloud API
-   * Invoked strictly when internet is available AND on-device confidence is below 70%
+   * ONLINE GEMINI CLASSIFICATION:
+   * Classifies photo into one of the 8 approved categories using Gemini API.
+   * If offline or error, seamlessly returns 'offline_manual_selection'.
    */
   public async consultCloudFallback(imageBase64: string, language: string = 'hi'): Promise<MaterialDetectionResult> {
     const startTime = performance.now();
@@ -773,33 +621,30 @@ export class MaterialDetectionService {
         const cloudData = resData.data;
         const isEw = cloudData.isEWaste !== false;
 
-        if (!isEw) {
-          return {
-            success: false,
-            status: 'rejected_quality',
-            rejectionCode: 'NO_OBJECT',
-            userMessageEn: `Not scrap: ${cloudData.detectedObject || 'Invalid item'}`,
-            userMessageHi: `अमान्य: ${cloudData.detectedObject || 'यह ई-कबाड़ नहीं है'}`,
-            userMessageMr: `अवैध: ${cloudData.detectedObject || 'हे ई-कचरा नाही'}`,
-            source: 'cloud-gemini-fallback',
-            inferenceTimeMs: inferenceTime,
-            isOffline: false
-          };
-        }
+        // Map cloud response strictly to one of the 8 categories
+        const mappedCategory = isEw
+          ? this.mapToStrictCategory(cloudData.category || cloudData.detectedCategory || cloudData.name_en)
+          : 'Other E-waste';
 
-        // Map cloud response to strict categories
-        const mappedCategory = this.mapToStrictCategory(cloudData.category || cloudData.detectedCategory);
+        const isOther = mappedCategory === 'Other E-waste';
         const details = this.getCategoryCommercialMetadata(mappedCategory);
 
         return {
           success: true,
           status: 'valid_material',
           predictedCategory: mappedCategory,
-          confidenceScore: cloudData.confidenceScore ? Math.round(cloudData.confidenceScore) : 89,
-          userMessageEn: `${mappedCategory} verified by Cloud AI`,
-          userMessageHi: `${this.getHindiCategoryName(mappedCategory)} (क्लाउड एआई द्वारा सत्यापित)`,
-          userMessageMr: `${this.getMarathiCategoryName(mappedCategory)} (क्लाउड AI द्वारे सत्यापित)`,
-          suggestedRatePerKg: cloudData.estimatedRatePerKg || details.pricePerKg,
+          confidenceScore: cloudData.confidenceScore ? Math.round(cloudData.confidenceScore) : 92,
+          isAutoClassifiedOther: isOther,
+          userMessageEn: isOther
+            ? 'Other E-waste detected. Factory will decide final rate.'
+            : `${mappedCategory} identified by Gemini AI (${cloudData.confidenceScore || 92}% confidence).`,
+          userMessageHi: isOther
+            ? 'अन्य ई-कचरा दर्ज। कारखाना अंतिम भाव तय करेगा।'
+            : `${this.getHindiCategoryName(mappedCategory)} (Gemini AI द्वारा पहचाना गया)`,
+          userMessageMr: isOther
+            ? 'इतर ई-कचरा नोंदवले. कारखाना अंतिम दर ठरवेल.'
+            : `${this.getMarathiCategoryName(mappedCategory)} (Gemini AI द्वारे ओळखले)`,
+          suggestedRatePerKg: isOther ? 0 : (cloudData.suggestedRatePerKg || details.pricePerKg),
           grade: cloudData.grade || details.grade,
           hazardLevel: cloudData.hazardLevel || details.hazardLevel,
           hazardWarningEn: cloudData.hazardWarning_en || details.hazardWarningEn,
@@ -813,20 +658,22 @@ export class MaterialDetectionService {
         };
       }
     } catch (err) {
-      console.warn('Gemini cloud fallback failed:', err);
+      console.warn('Gemini cloud call error, falling back to manual selection:', err);
     }
 
-    // Default return if cloud failed
+    // Graceful fallback: manual selection
     return {
-      success: false,
-      status: 'rejected_low_confidence',
-      rejectionCode: 'LOW_CONFIDENCE',
-      userMessageEn: 'Category not found. Please take a clearer photo of the material.',
-      userMessageHi: 'श्रेणी नहीं मिली। कृपया सामग्री की साफ फोटो लें।',
-      userMessageMr: 'प्रवर्ग सापडला नाही. कृपया सामग्रीचा अधिक स्पष्ट फोटो काढा.',
+      success: true,
+      status: 'offline_manual_selection',
+      predictedCategory: 'Other E-waste',
+      confidenceScore: 0,
+      isAutoClassifiedOther: true,
+      userMessageEn: 'Please select scrap category from dropdown.',
+      userMessageHi: 'कृपया नीचे दी गई सूची से कबाड़ श्रेणी चुनें।',
+      userMessageMr: 'कृपया खालील यादीतून प्रकार निवडा.',
       source: 'cloud-gemini-fallback',
       inferenceTimeMs: Math.round(performance.now() - startTime),
-      isOffline: false
+      isOffline: true
     };
   }
 

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { QrCode, X, ExternalLink, Check, Copy, ShieldCheck, Globe } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { EWasteLot } from '../types';
 import { playFeedbackChime } from '../utils/speech';
 import { getTrackingUrl, VERCEL_DOMAIN } from '../utils/trackingUrl';
@@ -23,9 +24,6 @@ export const NewOrderQrModal: React.FC<NewOrderQrModalProps> = ({
 
   // The official Vercel tracking URL
   const vercelTrackingUrl = getTrackingUrl(lot.id);
-  
-  // High-contrast clean QR code image pointing strictly to the Vercel link
-  const qrCodeImgSrc = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=6&data=${encodeURIComponent(vercelTrackingUrl)}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(vercelTrackingUrl);
@@ -66,12 +64,13 @@ export const NewOrderQrModal: React.FC<NewOrderQrModalProps> = ({
 
         {/* QR Code Container */}
         <div className="bg-slate-50 border-2 border-emerald-500/30 rounded-2xl p-4 flex flex-col items-center justify-center mb-3 text-center relative group">
-          <div className="bg-white p-2.5 rounded-xl shadow-xs border border-slate-200 mb-2">
-            <img 
-              src={qrCodeImgSrc} 
-              alt={`QR Code for Order ${lot.id}`}
-              className="w-44 h-44 object-contain rounded-lg"
-              loading="lazy"
+          <div className="bg-white p-3 rounded-2xl shadow-xs border border-slate-200 mb-2 flex items-center justify-center">
+            <QRCodeSVG 
+              value={vercelTrackingUrl}
+              size={176}
+              level="H"
+              includeMargin={false}
+              fgColor="#022c22"
             />
           </div>
 

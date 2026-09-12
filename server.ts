@@ -67,71 +67,47 @@ app.post("/api/ai/classify-material", async (req, res) => {
         }
       }
 
-      const prompt = `You are the world's leading CPCB (Central Pollution Control Board, India) certified E-Waste Auditor, Material Science Classifier, and Computer Vision System assisting informal scrap collectors (Kabadiwalas) and certified recycling units in India under E-Waste Management Rules 2022.
+      const prompt = `You are a CPCB (Central Pollution Control Board, India) certified E-Waste Auditor and Vision System assisting scrap collectors (Kabadiwalas) under Indian E-Waste Rules 2022.
 
-CRITICAL FIRST STEP: RECOGNIZE ELECTRONIC WASTE & ARTIFACTS
-Carefully analyze the image:
-1. Is there electronic waste, hardware, cables, casings, batteries, circuit boards, screens, or dismantled devices present? Even if held in human hands, sitting on a desk, or shown during a demonstration, CLASSIFY THE ELECTRONIC ITEM.
-2. Only reject as non-e-waste if there is ABSOLUTELY NO electronic equipment, hardware, wiring, or casing present (e.g. purely a human face/selfie portrait with no e-waste, animals, food, clothing, paper, wood, stones, or blank background).
+Analyze the image carefully.
 
-IF PURELY NON-E-WASTE (HUMAN SELFIE, FOOD, NATURE WITH ZERO ELECTRONICS):
-You MUST set "isEWaste": false.
-Specify exactly what was detected in "detectedObject" (e.g. "Human portrait / Selfie", "Household organic waste", "Paper / Wood").
-Explain clearly why it cannot be accepted.
-Return strictly this JSON:
-{
-  "isEWaste": false,
-  "detectedObject": "<Clear name of what is shown, e.g. 'Fake image / Screen capture of a monitor' or 'Human Face / Selfie'>",
-  "category": "non_ewaste",
-  "name_en": "Not Genuine E-Waste (Fake / Non-Scrap Detected)",
-  "name_hi": "यह वास्तविक ई-कबाड़ नहीं है (नकली / अन्य वस्तु)",
-  "name_mr": "हे अस्सल ई-कचरा नाही (बनावट / इतर वस्तू)",
-  "grade": "Rejected / Non-Scrap",
-  "suggestedWeightKg": 0,
-  "weightRange": { "min": 0, "max": 0 },
-  "suggestedRatePerKg": 0,
-  "estimatedRatePerKg": 0,
-  "marketRateRange": { "min": 0, "max": 0 },
-  "hazardLevel": "safe",
-  "hazardWarning_en": "Verification failed: Item is either not real e-waste or a fake/screen photo.",
-  "hazardWarning_hi": "सत्यापन विफल: यह वास्तविक ई-कबाड़ नहीं है या स्क्रीन की फोटो है।",
-  "hazardWarning_mr": "सत्यापन अयशस्वी: हे खरे ई-कचरा नाही किंवा स्क्रीनचा फोटो आहे.",
-  "safeAction_en": "Please point the live camera directly at real electronic hardware (circuit boards, cables, batteries, motors, or dismantled appliances).",
-  "safeAction_hi": "कृपया वास्तविक इलेक्ट्रॉनिक हार्डवेयर (सर्किट बोर्ड, तार, बैटरी, मोटर या उपकरण) के सामने कैमरा रखें।",
-  "safeAction_mr": "कृपया प्रत्यक्ष इलेक्ट्रॉनिक उपकरणांसमोर कॅमेरा धरा.",
-  "crmYield": { "copperPct": 0, "lithiumPct": 0, "cobaltPct": 0, "neodymiumPct": 0, "goldGramsPerTon": 0 },
-  "detectedComponents": [],
-  "anomalyDetected": true,
-  "anomalyReason": "Fake image, screen display photograph, or non-e-waste subject detected by computer vision.",
-  "confidenceScore": 99.5,
-  "recommendedRecycler": "N/A - Rejected",
-  "vernacularVoiceSummary_hi": "यह मान्य इलेक्ट्रॉनिक कबाड़ नहीं है। कृपया वास्तविक ई-वेस्ट का फोटो खींचें।",
-  "vernacularVoiceSummary_mr": "हे वैध ई-कचरा नाही. कृपया खऱ्या ई-कचऱ्याचा फोटो काढा.",
-  "vernacularVoiceSummary_en": "Invalid scrap. Please capture real electronic hardware."
-}
+CRITICAL RULE:
+You MUST classify the item into STRICTLY ONE of these 8 categories only:
+1. "PCB / Circuit Board" (Motherboards, green/blue circuit boards, chips, ram, cards)
+2. "Cables / Wires" (Copper wires, power cords, telecom cables, coils)
+3. "Battery" (Li-ion, lead-acid, phone batteries, laptop battery packs, EV cells)
+4. "Motor / Magnet Assembly" (Electric motors, hard disk magnets, transformers, coils)
+5. "Plastic (Mixed)" (Computer/printer plastic body casings, keyboard shells, monitor bodies)
+6. "CRT / Monitor" (Old cathode ray tube monitors, bulky glass screens, picture tubes)
+7. "LCD / Screen" (Flat LCD/LED panels, laptop screens, smartphone displays)
+8. "Other E-waste" (Any other e-waste, chargers, mixed hardware, dismantled devices, or unclear e-waste)
 
-IF THE IMAGE IS REAL ELECTRONIC SCRAP / E-WASTE:
+If the image is completely NOT e-waste (e.g. human face selfie with no electronics, food, animal, trees):
+Set "isEWaste": false, "category": "Other E-waste", "detectedObject": "<what is shown>".
+
+If the image is e-waste or hardware:
 Set "isEWaste": true.
-Provide deep, authoritative classification:
-1. Dynamic Custom Category: Generate an accurate, highly specific descriptive scrap category name (e.g. "Telecom Base Station SMPS Board", "High-Grade Server Dual-CPU Motherboard", "Swollen Li-Polymer EV/Drone Battery Cell", "Neodymium HDD Actuator Arm Magnet", "Heavy Copper Winding Transformer Core", "Industrial Variable Frequency Drive PCB").
-2. Category slug: one of ["pcb", "copper", "battery", "crt", "lcd", "magnet", "plastic", "mixed", "custom_e_waste"].
-3. Name in English, Hindi (Devanagari script), and Marathi (Devanagari script).
-4. Grade (e.g. "Grade-A Gold Contacts", "Berry/Barley 99% Pure Copper", "Class-1 Hazmat Li-ion", "Industrial Grade").
-5. Realistic suggested weight in kg (e.g. 0.5 to 15.0 kg based on visible size) and weightRange { min, max }.
-6. Estimated fair Mandi price per kg in Indian Rupees (INR) reflecting real Indian market dynamics (e.g. High-grade server PCB: ₹450-₹550/kg, Telecom boards: ₹380-₹480/kg, Unburnt copper wire: ₹720-₹760/kg, Lithium batteries: ₹280-₹340/kg, CRT yoke: ₹40-₹60/kg, Rare earth magnets: ₹500-₹620/kg).
-7. Hazard Level: "safe", "medium", or "high".
-8. Explicit hazard warning and safe handling directives for informal waste pickers in English, Hindi, and Marathi.
-9. Critical Raw Materials (CRM) yield estimates:
-   - copperPct (0-100)
-   - lithiumPct (0-100)
-   - cobaltPct (0-100)
-   - neodymiumPct (0-100)
-   - goldGramsPerTon (e.g. 5 to 150 grams per ton)
-10. Detected physical components list (e.g. ["Gold-plated BGA sockets", "Tantalum capacitors", "Solid state capacitors", "Ferrite choke coils"]).
-11. Authorized CPCB recycler recommendation.
-12. Confidence score (number between 85.0 and 99.8).
+Set "category" to EXACTLY one of the 8 category names listed above.
+If confidence is low or category is ambiguous, choose "Other E-waste".
 
-Return ONLY valid JSON matching this structure without any markdown backticks.`;
+Return JSON with this exact schema:
+{
+  "isEWaste": true or false,
+  "detectedObject": "<Brief name of the object seen>",
+  "category": "PCB / Circuit Board" | "Cables / Wires" | "Battery" | "Motor / Magnet Assembly" | "Plastic (Mixed)" | "CRT / Monitor" | "LCD / Screen" | "Other E-waste",
+  "name_en": "<Selected category name>",
+  "name_hi": "<Hindi translation of category>",
+  "name_mr": "<Marathi translation of category>",
+  "confidenceScore": <number between 70 and 99>,
+  "suggestedRatePerKg": <number or 0 if Other E-waste>,
+  "grade": "<e.g. Standard Grade>",
+  "hazardLevel": "safe" | "medium" | "high",
+  "hazardWarning_en": "<short safety warning if any>",
+  "hazardWarning_hi": "<short safety warning in Hindi>",
+  "safeAction_en": "<safe handling instruction>",
+  "safeAction_hi": "<safe handling instruction in Hindi>",
+  "crmYield": { "copperPct": 0, "lithiumPct": 0, "cobaltPct": 0, "neodymiumPct": 0, "goldGramsPerTon": 0 }
+}`;
 
       const imagePart = {
         inlineData: {
@@ -154,22 +130,59 @@ Return ONLY valid JSON matching this structure without any markdown backticks.`;
         const parsed = JSON.parse(responseText);
         const isEw = parsed.isEWaste !== false;
 
+        const VALID_STRICT = [
+          "PCB / Circuit Board",
+          "Cables / Wires",
+          "Battery",
+          "Motor / Magnet Assembly",
+          "Plastic (Mixed)",
+          "CRT / Monitor",
+          "LCD / Screen",
+          "Other E-waste"
+        ];
+
+        const mapCategory = (raw: string): string => {
+          if (!raw) return "Other E-waste";
+          if (VALID_STRICT.includes(raw)) return raw;
+          const s = raw.toLowerCase();
+          if (s.includes("pcb") || s.includes("circuit") || s.includes("board")) return "PCB / Circuit Board";
+          if (s.includes("wire") || s.includes("cable") || s.includes("copper")) return "Cables / Wires";
+          if (s.includes("battery") || s.includes("cell") || s.includes("lithium")) return "Battery";
+          if (s.includes("motor") || s.includes("magnet") || s.includes("transformer")) return "Motor / Magnet Assembly";
+          if (s.includes("plastic") || s.includes("casing") || s.includes("body")) return "Plastic (Mixed)";
+          if (s.includes("crt") || s.includes("tube")) return "CRT / Monitor";
+          if (s.includes("lcd") || s.includes("screen") || s.includes("display")) return "LCD / Screen";
+          return "Other E-waste";
+        };
+
+        const strictCat = isEw ? mapCategory(parsed.category || parsed.name_en) : "Other E-waste";
+        const isOther = strictCat === "Other E-waste";
+
+        const STANDARD_RATES: Record<string, number> = {
+          "PCB / Circuit Board": 480,
+          "Cables / Wires": 720,
+          "Battery": 320,
+          "Motor / Magnet Assembly": 220,
+          "Plastic (Mixed)": 35,
+          "CRT / Monitor": 80,
+          "LCD / Screen": 180,
+          "Other E-waste": 0
+        };
+
         const normalizedData = {
           isEWaste: isEw,
-          detectedObject: parsed.detectedObject,
-          category: parsed.category || (isEw ? "pcb" : "non_ewaste"),
-          detectedCategory: isEw 
-            ? (language === "hi" ? parsed.name_hi : language === "mr" ? parsed.name_mr : parsed.name_en) || parsed.name_en || "Electronic Scrap"
-            : (language === "hi" ? parsed.name_hi : language === "mr" ? parsed.name_mr : parsed.name_en) || "Not E-Waste",
-          name_en: parsed.name_en || (isEw ? "Electronic Scrap" : "Not Electronic Waste"),
-          name_hi: parsed.name_hi || (isEw ? "इलेक्ट्रॉनिक स्क्रैप" : "यह ई-कबाड़ नहीं है"),
-          name_mr: parsed.name_mr || (isEw ? "इलेक्ट्रॉनिक स्क्रॅप" : "हे ई-कचरा नाही"),
-          grade: parsed.grade || (isEw ? "Standard Grade" : "Invalid Material"),
+          detectedObject: parsed.detectedObject || strictCat,
+          category: strictCat,
+          detectedCategory: strictCat,
+          name_en: strictCat,
+          name_hi: parsed.name_hi || strictCat,
+          name_mr: parsed.name_mr || strictCat,
+          grade: parsed.grade || (isOther ? "Unclassified E-Waste" : "Standard CPCB Grade"),
           suggestedWeightKg: isEw ? (parsed.suggestedWeightKg ?? 2.5) : 0,
           weightRange: parsed.weightRange || (isEw ? { min: 1.0, max: 5.0 } : { min: 0, max: 0 }),
-          suggestedRatePerKg: isEw ? (parsed.suggestedRatePerKg ?? 300) : 0,
-          estimatedRatePerKg: isEw ? (parsed.suggestedRatePerKg ?? 300) : 0,
-          marketRateRange: parsed.marketRateRange || (isEw ? { min: 280, max: 320 } : { min: 0, max: 0 }),
+          suggestedRatePerKg: isOther ? 0 : (parsed.suggestedRatePerKg || STANDARD_RATES[strictCat] || 100),
+          estimatedRatePerKg: isOther ? 0 : (parsed.suggestedRatePerKg || STANDARD_RATES[strictCat] || 100),
+          marketRateRange: parsed.marketRateRange || (isOther ? { min: 0, max: 0 } : { min: 100, max: 500 }),
           hazardLevel: parsed.hazardLevel || "safe",
           hazardWarning: parsed[`hazardWarning_${language}`] || parsed.hazardWarning_en || parsed.hazardWarning_hi || "",
           hazardWarning_en: parsed.hazardWarning_en || "",

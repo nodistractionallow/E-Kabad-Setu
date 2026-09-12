@@ -5,10 +5,11 @@ import {
   onSnapshot,
   setDoc,
   updateDoc,
+  deleteDoc,
   writeBatch
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility } from '../types';
+import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility, AuthSession } from '../types';
 import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, MOCK_RECYCLER } from '../data/mockData';
 import { speakVoice, playFeedbackChime, stopVoice } from '../utils/speech';
 import { supabase } from '../lib/supabase';
@@ -24,6 +25,9 @@ import {
 interface AppContextType {
   currentView: UserRole;
   setCurrentView: (view: UserRole) => void;
+  authSession: AuthSession | null;
+  login: (role: UserRole, userDetails?: any) => void;
+  logout: () => void;
   language: Language;
   setLanguage: (lang: Language) => void;
   isOnline: boolean;
@@ -44,6 +48,8 @@ interface AppContextType {
   syncPendingAiClassifications: () => Promise<void>;
   isSyncingOfflineQueue: boolean;
   resetAllData: () => Promise<void>;
+  deleteLotWithKey: (lotId: string, adminKey: string) => Promise<boolean>;
+  restoreLot: (lot: EWasteLot) => Promise<void>;
   speak: (text: string) => void;
   stopAudio: () => void;
   isFirebaseSyncing: boolean;
@@ -60,13 +66,38 @@ const STORAGE_KEYS = {
   LOTS: 'ekabad_lots_v1',
   MATERIALS: 'ekabad_materials_v1',
   COLLECTOR: 'ekabad_collector_v1',
-  ONLINE: 'ekabad_online_v1'
+  ONLINE: 'ekabad_online_v1',
+  AUTH_SESSION: 'ekabad_auth_session_v1',
+  RECYCLE_BIN: 'ekabad_govt_recycle_bin_v1'
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.isLoggedIn) {
+          return parsed;
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  });
+
   const [currentView, setCurrentView] = useState<UserRole>(() => {
     try {
-      return (localStorage.getItem(STORAGE_KEYS.VIEW) as UserRole) || 'gateway';
+      const storedSession = localStorage.getItem(STORAGE_KEYS.AUTH_SESSION);
+      if (storedSession) {
+        const parsed = JSON.parse(storedSession);
+        if (parsed && parsed.isLoggedIn && parsed.role) {
+          return parsed.role;
+        }
+      }
+      const storedView = localStorage.getItem(STORAGE_KEYS.VIEW);
+      return (storedView as UserRole) || 'gateway';
     } catch {
       return 'gateway';
     }
@@ -150,6 +181,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('LocalStorage error:', e);
     }
   }, [currentView]);
+
+  useEffect(() => {
+    try {
+      if (authSession) {
+        localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(authSession));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.AUTH_SESSION);
+      }
+    } catch (e) {
+      console.warn('LocalStorage error:', e);
+    }
+  }, [authSession]);
 
   useEffect(() => {
     try {
@@ -713,11 +756,92 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     playFeedbackChime('beep');
   };
 
+  const login = (role: UserRole, userDetails?: any) => {
+    const session: AuthSession = {
+      isLoggedIn: true,
+      role,
+      user: userDetails || {
+        id: role === 'collector' ? collector.id : role === 'recycler' ? recycler.id : 'GOV-CPCB-OFFICER',
+        name: role === 'collector' ? collector.name : role === 'recycler' ? recycler.name : 'CPCB Central Desk'
+      },
+      loginTime: Date.now()
+    };
+    setAuthSession(session);
+    try {
+      localStorage.setItem(STORAGE_KEYS.AUTH_SESSION, JSON.stringify(session));
+      localStorage.setItem(STORAGE_KEYS.VIEW, role);
+    } catch (e) {
+      console.warn('LocalStorage auth session save notice:', e);
+    }
+    setCurrentView(role);
+    playFeedbackChime('success');
+  };
+
+  const logout = () => {
+    setAuthSession(null);
+    try {
+      localStorage.removeItem(STORAGE_KEYS.AUTH_SESSION);
+      localStorage.setItem(STORAGE_KEYS.VIEW, 'gateway');
+    } catch (e) {
+      console.warn('LocalStorage auth session clear notice:', e);
+    }
+    setCurrentView('gateway');
+    playFeedbackChime('beep');
+  };
+
+  const deleteLotWithKey = async (lotId: string, adminKey: string): Promise<boolean> => {
+    if (adminKey.trim() !== '12345678') {
+      return false;
+    }
+
+    setLots((prev) => prev.filter((l) => l.id !== lotId));
+
+    try {
+      const lotRef = doc(db, 'lots', lotId);
+      await deleteDoc(lotRef);
+    } catch (e) {
+      console.warn('Firestore deleteLot notice:', e);
+    }
+
+    try {
+      enqueueSyncAction('lots', 'delete', lotId, { id: lotId });
+      setPendingSyncCount(getSyncQueue().length);
+    } catch (e) {
+      console.warn('Sync queue delete notice:', e);
+    }
+
+    return true;
+  };
+
+  const restoreLot = async (lot: EWasteLot): Promise<void> => {
+    setLots((prev) => {
+      const exists = prev.some((l) => l.id === lot.id);
+      return exists ? prev : [lot, ...prev];
+    });
+
+    try {
+      const lotRef = doc(db, 'lots', lot.id);
+      await setDoc(lotRef, lot, { merge: true });
+    } catch (e) {
+      console.warn('Firestore restoreLot notice:', e);
+    }
+
+    try {
+      enqueueSyncAction('lots', 'insert', lot.id, lot);
+      setPendingSyncCount(getSyncQueue().length);
+    } catch (e) {
+      console.warn('Sync queue restore notice:', e);
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
         currentView,
         setCurrentView,
+        authSession,
+        login,
+        logout,
         language,
         setLanguage,
         isOnline,
@@ -738,6 +862,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncPendingAiClassifications,
         isSyncingOfflineQueue,
         resetAllData,
+        deleteLotWithKey,
+        restoreLot,
         speak,
         stopAudio,
         isFirebaseSyncing,
