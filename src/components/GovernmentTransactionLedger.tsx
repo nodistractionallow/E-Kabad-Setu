@@ -147,21 +147,34 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
   };
 
   // Merge live app lots with national transaction log
+  // Merge live app lots with national transaction log
   const allCombinedTransactions = useMemo(() => {
     // Transform lots from app state into transaction records safely with null guards
     const appLotsAsTxns: TransactionRecord[] = lots.map((lot) => {
-      const createdDate = lot.createdAt 
-        ? (lot.createdAt.includes('T') ? lot.createdAt.split('T')[0] : lot.createdAt)
-        : (lot.timestamp ? (lot.timestamp.includes('T') ? lot.timestamp.split('T')[0] : lot.timestamp.split(' ')[0]) : new Date().toISOString().split('T')[0]);
+      const isLotPaid = lot.status?.toLowerCase() === 'paid' || 
+                        lot.status?.toLowerCase() === 'settled' || 
+                        Boolean(lot.paidAt) || 
+                        Boolean(lot.settlementUtr);
+
+      const effectiveDate = (isLotPaid && lot.paidAt)
+        ? (lot.paidAt.includes('T') ? lot.paidAt.split('T')[0] : lot.paidAt)
+        : (lot.createdAt 
+            ? (lot.createdAt.includes('T') ? lot.createdAt.split('T')[0] : lot.createdAt)
+            : (lot.timestamp ? (lot.timestamp.includes('T') ? lot.timestamp.split('T')[0] : (lot.timestamp.includes('/') ? lot.timestamp.split(' ')[0] : lot.timestamp)) : new Date().toISOString().split('T')[0]));
+
+      const effectiveTimestamp = (isLotPaid && lot.paidAt) 
+        ? lot.paidAt 
+        : (lot.paidTimestamp ? new Date(lot.paidTimestamp).toISOString() : (lot.createdAt || lot.timestamp || new Date().toISOString()));
+
       const rate = lot.ratePerKg || (lot as any).pricePerKg || 480;
       const weight = lot.weighbridgeWeightKg || lot.weightKg || 5.0;
       const amount = lot.finalPayoutAmount || lot.totalAmount || (weight * rate);
 
       return {
-        id: `TXN-APP-${lot.id.slice(-6)}`,
+        id: lot.id,
         lotId: lot.id,
-        date: createdDate,
-        timestamp: lot.createdAt || lot.timestamp || new Date().toISOString(),
+        date: effectiveDate,
+        timestamp: effectiveTimestamp,
         vendorId: lot.facilityId || (lot as any).recyclerId || 'fac_mumbai_01',
         vendorName: lot.facilityName || (lot as any).recyclerName || 'EcoRecycle CleanTech Hub (Turbhe)',
         vendorCpcbId: 'CPCB-REG-2024-MH-084',
@@ -180,10 +193,10 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
         ratePerKg: rate,
         totalAmount: amount,
         paymentMode: (lot.paymentMode as any) || 'UPI',
-        paymentStatus: (lot.status === 'verified' || lot.status === 'paid') ? 'settled' : lot.status === 'rejected' ? 'rejected' : 'processing',
+        paymentStatus: isLotPaid ? 'settled' : (lot.status === 'verified' ? 'settled' : (lot.status === 'rejected' ? 'rejected' : 'processing')),
         settlementUtr: lot.settlementUtr || `UPI-SETTLE-${lot.id.slice(-8).toUpperCase()}`,
         eprCreditGeneratedKg: Math.round(weight * 0.85),
-        eprCertificateNo: (lot.status === 'verified' || lot.status === 'paid') ? `EPR-CPCB-2026-VAL-${lot.id.slice(-4)}` : undefined,
+        eprCertificateNo: (isLotPaid || lot.status === 'verified') ? `EPR-CPCB-2026-VAL-${lot.id.slice(-4)}` : undefined,
         gpsCoordinates: lot.gpsLocation || '18.5204° N, 73.8567° E'
       };
     });
@@ -196,9 +209,17 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
     return allCombinedTransactions.filter((tx) => {
       // Authority Filter
       if (selectedAuthorityId) {
-        const auth = REGULATORY_AUTHORITIES.find((a) => a.id === selectedAuthorityId);
-        if (auth && !tx.statePcb.toLowerCase().includes(auth.code.toLowerCase()) && !tx.statePcb.toLowerCase().includes(auth.name.toLowerCase().split(' ')[0])) {
-          return false;
+        // CPCB is central national authority that monitors all state feeds
+        if (selectedAuthorityId !== 'auth_cpcb') {
+          const auth = REGULATORY_AUTHORITIES.find((a) => a.id === selectedAuthorityId);
+          if (auth) {
+            const authCode = auth.code.toLowerCase();
+            const authNameFirst = auth.name.toLowerCase().split(' ')[0];
+            const matchesAuth = tx.statePcb.toLowerCase().includes(authCode) || 
+                                tx.statePcb.toLowerCase().includes(authNameFirst) ||
+                                tx.authorityId === selectedAuthorityId;
+            if (!matchesAuth) return false;
+          }
         }
       }
 
@@ -238,8 +259,14 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
           tx.settlementUtr.toLowerCase().includes(q) ||
           tx.vendorName.toLowerCase().includes(q) ||
           tx.collectorName.toLowerCase().includes(q) ||
+          (tx.collectorId && tx.collectorId.toLowerCase().includes(q)) ||
+          (tx.collectorPhone && tx.collectorPhone.toLowerCase().includes(q)) ||
           tx.materialName.toLowerCase().includes(q) ||
           tx.statePcb.toLowerCase().includes(q) ||
+          tx.paymentStatus.toLowerCase().includes(q) ||
+          (q.includes('paid') && tx.paymentStatus === 'settled') ||
+          (q.includes('verif') && (tx.paymentStatus === 'settled' || Boolean(tx.eprCertificateNo))) ||
+          (q.includes('settl') && tx.paymentStatus === 'settled') ||
           (tx.date && tx.date.toLowerCase().includes(q)) ||
           dateStr.includes(q);
         if (!matches) return false;

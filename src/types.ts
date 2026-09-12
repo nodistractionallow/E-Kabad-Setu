@@ -35,6 +35,8 @@ export interface CategoryApprovalRequest {
   categoryName: string;
   categoryName_hi?: string;
   categoryName_mr?: string;
+  materialName?: string;
+  category?: string;
   requestedByCollectorId?: string;
   requestedByCollectorName?: string;
   collectorId?: string;
@@ -103,6 +105,17 @@ export interface EWasteLot {
   createdAt?: string;
   anomalyCleared?: boolean;
   anomalyResolution?: 'SUPERVISOR_OVERRIDE' | 'REJECTED' | 'CLEARED';
+  anomalyResolvedBy?: string;
+  reopened?: boolean;
+  reopenedAt?: string;
+  reopenedBy?: string;
+  crmYield?: {
+    copperPct: number;
+    lithiumPct: number;
+    cobaltPct: number;
+    neodymiumPct: number;
+    goldGramsPerTon: number;
+  };
 }
 
 export interface CollectorProfile {
@@ -120,6 +133,9 @@ export interface CollectorProfile {
   todayEarnings: number;
   todayWeightKg: number;
   totalLotsCount: number;
+  walletBalance?: number;
+  totalKgCollected?: number;
+  rating?: number;
 }
 
 export interface RecyclerFacility {
@@ -278,5 +294,25 @@ export interface PartnerRegistration {
   partnerType?: 'RECYCLER_FACILITY' | 'AGGREGATOR_HUB';
   annualCapacityMetricTons?: number;
   categoriesHandled?: string[];
+  entityType?: string;
+  organizationName?: string;
+  contactPerson?: string;
+}
+
+export interface SqliteEngineStatus {
+  engine: string;
+  version: string;
+  dbFilePath: string;
+  fileSizeBytes: number;
+  fileSizeKb: string;
+  integrity: string;
+  tables: string[];
+  totalLots: number;
+  paidLots: number;
+  pendingLots: number;
+  materialsCount: number;
+  categoryRequestsCount: number;
+  partnersCount: number;
+  lastSyncedAt: string;
 }
 

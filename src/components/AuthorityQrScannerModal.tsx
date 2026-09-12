@@ -20,6 +20,7 @@ import { useApp } from '../context/AppContext';
 import { db } from '../lib/firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { playFeedbackChime } from '../utils/speech';
+import { fetchSqliteLotById } from '../lib/sqliteClient';
 
 interface AuthorityQrScannerModalProps {
   isOpen: boolean;
@@ -83,7 +84,7 @@ export const AuthorityQrScannerModal: React.FC<AuthorityQrScannerModalProps> = (
     return null;
   };
 
-  // Resolve lot from local state or direct Firestore lookup
+  // Resolve lot from local state, SQLite, or Firestore lookup
   const resolveAndSelectLot = useCallback(async (rawText: string) => {
     const lotId = extractLotId(rawText);
     if (!lotId) {
@@ -93,13 +94,35 @@ export const AuthorityQrScannerModal: React.FC<AuthorityQrScannerModalProps> = (
     }
 
     setIsProcessing(true);
-    setScanFeedback(`Locating Manifest #${lotId} on CPCB network...`);
+    setScanFeedback(`Verifying Manifest #${lotId} on SQLite & CPCB network...`);
 
     try {
-      // 1. Check local context lots first
-      let matchedLot = lots.find((l) => l.id.toUpperCase() === lotId.toUpperCase());
+      // 1. Query SQLite storage first for high-fidelity relational record
+      let matchedLot: EWasteLot | null = null;
+      try {
+        const sqliteRecord = await fetchSqliteLotById(lotId);
+        if (sqliteRecord) {
+          matchedLot = sqliteRecord;
+        }
+      } catch (sqlErr) {
+        console.warn('SQLite lookup notice:', sqlErr);
+      }
 
-      // 2. If not in memory, query Firestore directly
+      // 2. Check local context lots if SQLite didn't find it or for memory state
+      const contextMatch = lots.find((l) => l.id.toUpperCase() === lotId.toUpperCase());
+      if (contextMatch) {
+        if (!matchedLot) {
+          matchedLot = contextMatch;
+        } else {
+          // If context has paid status and SQLite was older, prioritize paid!
+          const contextIsPaid = contextMatch.status === 'paid' || Boolean(contextMatch.paidAt) || Boolean(contextMatch.settlementUtr);
+          if (contextIsPaid) {
+            matchedLot = { ...matchedLot, ...contextMatch, status: 'paid' };
+          }
+        }
+      }
+
+      // 3. Check Firestore if still not located
       if (!matchedLot) {
         try {
           const docRef = doc(db, 'lots', lotId);
@@ -112,7 +135,7 @@ export const AuthorityQrScannerModal: React.FC<AuthorityQrScannerModalProps> = (
         }
       }
 
-      // 3. If still not in database (e.g. freshly scanned external QR), synthesize compliant lot
+      // 4. If freshly scanned external QR code not in database, synthesize compliant lot
       if (!matchedLot) {
         const defaultMaterial = materials[0] || {
           id: 'mat_pcb_high',
@@ -145,7 +168,7 @@ export const AuthorityQrScannerModal: React.FC<AuthorityQrScannerModalProps> = (
           photoUrl: 'https://images.unsplash.com/photo-1597733336794-12d05021d510?w=400&auto=format&fit=crop&q=80'
         };
 
-        // Persist so both devices have it registered
+        // Persist so remote and local storage have it registered
         try {
           await setDoc(doc(db, 'lots', lotId), matchedLot, { merge: true });
         } catch (saveErr) {
@@ -153,13 +176,28 @@ export const AuthorityQrScannerModal: React.FC<AuthorityQrScannerModalProps> = (
         }
       }
 
-      playFeedbackChime('success');
-      setScanFeedback(`Found Lot ${matchedLot.id}! Opening Weighbridge Audit...`);
+      // 5. Explicitly inspect payment status
+      const isPaid = matchedLot.status?.toLowerCase() === 'paid' || 
+                     matchedLot.status?.toLowerCase() === 'settled' || 
+                     Boolean(matchedLot.paidAt) || 
+                     Boolean(matchedLot.settlementUtr);
+
+      const effectivePayout = matchedLot.finalPayoutAmount || (matchedLot.weighbridgeWeightKg ? Math.round(matchedLot.weighbridgeWeightKg * matchedLot.ratePerKg) : matchedLot.totalAmount);
+
+      playFeedbackChime(isPaid ? 'success' : 'beep');
+
+      if (isPaid) {
+        matchedLot.status = 'paid';
+        setScanFeedback(`✓ Manifest #${matchedLot.id}: STATUS IS PAID (Settled ₹${effectivePayout.toLocaleString('en-IN')})`);
+      } else {
+        setScanFeedback(`⚠ Manifest #${matchedLot.id}: STATUS IS UNPAID (Awaiting Weighbridge Clearance)`);
+      }
+
       setTimeout(() => {
         setIsProcessing(false);
         onLotSelected(matchedLot!);
         onClose();
-      }, 600);
+      }, 700);
 
     } catch (err) {
       console.error('Error resolving scanned lot:', err);

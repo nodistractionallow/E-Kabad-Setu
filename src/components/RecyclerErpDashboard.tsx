@@ -197,10 +197,16 @@ export const RecyclerErpDashboard: React.FC = () => {
     goldGrams: number;
   } | null>(null);
 
-  const pendingLots = lots.filter((l) => l.status === 'pending');
+  const pendingLots = lots.filter((l) => l.status === 'pending' && !l.paidAt && !l.settlementUtr);
   const flaggedAnomalyLots = lots.filter((l) => l.status !== 'rejected' && (l.anomalyFlag || l.ratePerKg > 900 || (l.category === 'pcb' && l.weightKg > 50)));
   const rejectedLots = lots.filter((l) => l.status === 'rejected');
-  const verifiedLots = lots.filter((l) => l.status === 'paid' || l.status === 'verified');
+  const verifiedLots = lots.filter((l) => 
+    l.status === 'paid' || 
+    l.status === 'verified' || 
+    l.status === 'settled' || 
+    Boolean(l.paidAt) || 
+    Boolean(l.settlementUtr)
+  );
 
   // Tally Recovered CRM Elements
   const totalProcessedKg = verifiedLots.reduce((acc, l) => acc + (l.weighbridgeWeightKg || l.weightKg), 0);
@@ -215,7 +221,7 @@ export const RecyclerErpDashboard: React.FC = () => {
   // 1. Pending Queue Table Filtering, Sorting & Pagination
   const filteredPendingLots = useMemo(() => {
     return pendingLots.filter((lot) => {
-      const dateStr = getSearchableDateString(lot.timestamp).toLowerCase();
+      const dateStr = getSearchableDateString(lot.timestamp || lot.createdAt).toLowerCase();
       const matchSearch = pendingSearch === '' || 
         lot.id.toLowerCase().includes(pendingSearch.toLowerCase()) ||
         lot.collectorName.toLowerCase().includes(pendingSearch.toLowerCase()) ||
@@ -226,8 +232,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = pendingCategory === 'ALL' || lot.category.toLowerCase() === pendingCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (pendingSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
-      if (pendingSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
+      if (pendingSort === 'date_desc') return parseDateTimeToMs(b.timestamp || b.createdAt) - parseDateTimeToMs(a.timestamp || a.createdAt);
+      if (pendingSort === 'date_asc') return parseDateTimeToMs(a.timestamp || a.createdAt) - parseDateTimeToMs(b.timestamp || b.createdAt);
       if (pendingSort === 'mass_desc') return b.weightKg - a.weightKg;
       if (pendingSort === 'mass_asc') return a.weightKg - b.weightKg;
       if (pendingSort === 'rate_desc') return b.ratePerKg - a.ratePerKg;
@@ -245,7 +251,8 @@ export const RecyclerErpDashboard: React.FC = () => {
   // 2. Verified & Paid Table Filtering, Sorting & Pagination
   const filteredPaidLots = useMemo(() => {
     return verifiedLots.filter((lot) => {
-      const dateStr = getSearchableDateString(lot.paidAt || lot.timestamp).toLowerCase();
+      const effectiveDate = lot.paidAt || lot.paidTimestamp || lot.timestamp || lot.createdAt;
+      const dateStr = getSearchableDateString(effectiveDate).toLowerCase();
       const matchSearch = paidSearch === '' ||
         lot.id.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.collectorName.toLowerCase().includes(paidSearch.toLowerCase()) ||
@@ -254,18 +261,20 @@ export const RecyclerErpDashboard: React.FC = () => {
         (lot.facilityName && lot.facilityName.toLowerCase().includes(paidSearch.toLowerCase())) ||
         (lot.settlementUtr && lot.settlementUtr.toLowerCase().includes(paidSearch.toLowerCase())) ||
         dateStr.includes(paidSearch.toLowerCase()) ||
-        (lot.paymentMode && lot.paymentMode.toLowerCase().includes(paidSearch.toLowerCase()));
+        (lot.paymentMode && lot.paymentMode.toLowerCase().includes(paidSearch.toLowerCase())) ||
+        (paidSearch.toLowerCase().includes('paid') && (lot.status === 'paid' || Boolean(lot.paidAt))) ||
+        (paidSearch.toLowerCase().includes('verif') && (lot.status === 'paid' || lot.status === 'verified'));
       const matchCat = paidCategory === 'ALL' || lot.category.toLowerCase() === paidCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
       if (paidSort === 'date_desc') {
-        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.timestamp);
-        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.timestamp);
+        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.createdAt) || parseDateTimeToMs(a.timestamp);
+        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.createdAt) || parseDateTimeToMs(b.timestamp);
         return timeB - timeA;
       }
       if (paidSort === 'date_asc') {
-        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.timestamp);
-        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.timestamp);
+        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.createdAt) || parseDateTimeToMs(a.timestamp);
+        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.createdAt) || parseDateTimeToMs(b.timestamp);
         return timeA - timeB;
       }
       const massA = a.weighbridgeWeightKg || a.weightKg;

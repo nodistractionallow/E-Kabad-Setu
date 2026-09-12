@@ -2,6 +2,23 @@ import express from "express";
 import path from "path";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import {
+  sqliteGetStatus,
+  sqliteGetLots,
+  sqliteGetLotById,
+  sqliteUpsertLot,
+  sqliteDeleteLot,
+  sqliteGetMaterials,
+  sqliteUpdateMaterialPrice,
+  sqliteGetCategoryRequests,
+  sqliteUpsertCategoryRequest,
+  sqliteGetPartners,
+  sqliteUpsertPartner,
+  sqliteGetCollector,
+  sqliteUpsertCollector,
+  sqliteExecuteQuery,
+  sqliteResetDatabase
+} from "./src/server/sqliteDb.js";
 
 dotenv.config();
 
@@ -36,6 +53,205 @@ app.get("/api/health", (req, res) => {
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
     timestamp: new Date().toISOString(),
   });
+});
+
+// ==================== SQLITE STORAGE API ROUTES ====================
+
+// 1. Get Storage / SQLite Health & Engine Status
+app.get("/api/storage/status", async (req, res) => {
+  try {
+    const status = await sqliteGetStatus();
+    res.json({ success: true, ...status });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to get SQLite status" });
+  }
+});
+
+// 2. Lots CRUD
+app.get("/api/storage/lots", async (req, res) => {
+  try {
+    const lots = await sqliteGetLots();
+    res.json({ success: true, count: lots.length, data: lots });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to load lots from SQLite" });
+  }
+});
+
+app.get("/api/storage/lots/:id", async (req, res) => {
+  try {
+    const lot = await sqliteGetLotById(req.params.id);
+    if (!lot) {
+      return res.status(404).json({ success: false, error: "Lot not found in SQLite" });
+    }
+    res.json({ success: true, data: lot });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+app.post("/api/storage/lots", async (req, res) => {
+  try {
+    const lot = req.body;
+    if (!lot || !lot.id) {
+      return res.status(400).json({ success: false, error: "Missing lot.id in request body" });
+    }
+    await sqliteUpsertLot(lot);
+    res.json({ success: true, message: "Lot saved to SQLite successfully", data: lot });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to save lot to SQLite" });
+  }
+});
+
+app.put("/api/storage/lots/:id", async (req, res) => {
+  try {
+    const existing = await sqliteGetLotById(req.params.id);
+    const updated = { ...(existing || {}), ...req.body, id: req.params.id };
+    await sqliteUpsertLot(updated);
+    res.json({ success: true, message: "Lot updated in SQLite successfully", data: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to update lot in SQLite" });
+  }
+});
+
+app.delete("/api/storage/lots/:id", async (req, res) => {
+  try {
+    const { adminKey } = req.body || {};
+    if (adminKey !== "CPCB-ADMIN-2026" && adminKey !== "CPCB-GOV-2026" && adminKey !== "FORCE_RESET") {
+      return res.status(403).json({ success: false, error: "Invalid CPCB administrative key" });
+    }
+    await sqliteDeleteLot(req.params.id);
+    res.json({ success: true, message: `Lot ${req.params.id} permanently deleted from SQLite` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to delete lot from SQLite" });
+  }
+});
+
+// 3. Materials
+app.get("/api/storage/materials", async (req, res) => {
+  try {
+    const materials = await sqliteGetMaterials();
+    res.json({ success: true, count: materials.length, data: materials });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+app.put("/api/storage/materials/:id/price", async (req, res) => {
+  try {
+    const { pricePerKg } = req.body;
+    if (typeof pricePerKg !== "number" || pricePerKg <= 0) {
+      return res.status(400).json({ success: false, error: "Invalid pricePerKg value" });
+    }
+    await sqliteUpdateMaterialPrice(req.params.id, pricePerKg);
+    res.json({ success: true, message: `Material ${req.params.id} rate updated to ₹${pricePerKg} in SQLite` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// 4. Category Requests
+app.get("/api/storage/category-requests", async (req, res) => {
+  try {
+    const requests = await sqliteGetCategoryRequests();
+    res.json({ success: true, count: requests.length, data: requests });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+app.post("/api/storage/category-requests", async (req, res) => {
+  try {
+    await sqliteUpsertCategoryRequest(req.body);
+    res.json({ success: true, message: "Category request stored in SQLite", data: req.body });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+app.put("/api/storage/category-requests/:id", async (req, res) => {
+  try {
+    const currentList = await sqliteGetCategoryRequests();
+    const target = currentList.find(r => r.id === req.params.id) || { id: req.params.id };
+    const updated = { ...target, ...req.body, id: req.params.id };
+    await sqliteUpsertCategoryRequest(updated);
+    res.json({ success: true, message: "Category request updated in SQLite", data: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// 5. Partners
+app.get("/api/storage/partners", async (req, res) => {
+  try {
+    const partners = await sqliteGetPartners();
+    res.json({ success: true, count: partners.length, data: partners });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+app.post("/api/storage/partners", async (req, res) => {
+  try {
+    await sqliteUpsertPartner(req.body);
+    res.json({ success: true, message: "Partner registration stored in SQLite", data: req.body });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+app.put("/api/storage/partners/:id", async (req, res) => {
+  try {
+    const currentList = await sqliteGetPartners();
+    const target = currentList.find(p => p.id === req.params.id) || { id: req.params.id };
+    const updated = { ...target, ...req.body, id: req.params.id };
+    await sqliteUpsertPartner(updated);
+    res.json({ success: true, message: "Partner updated in SQLite", data: updated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// 6. Collector Profile
+app.get("/api/storage/collector", async (req, res) => {
+  try {
+    const profile = await sqliteGetCollector();
+    res.json({ success: true, data: profile });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+app.put("/api/storage/collector", async (req, res) => {
+  try {
+    await sqliteUpsertCollector(req.body);
+    res.json({ success: true, message: "Collector profile updated in SQLite", data: req.body });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
+// 7. Interactive SQL Query Console (For CPCB Government Audit & Diagnostics)
+app.post("/api/storage/query", async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query || typeof query !== "string") {
+      return res.status(400).json({ success: false, error: "Missing SQL query string in body" });
+    }
+    const result = await sqliteExecuteQuery(query);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || "SQL Execution Error" });
+  }
+});
+
+// 8. Reset SQLite Database
+app.post("/api/storage/reset", async (req, res) => {
+  try {
+    await sqliteResetDatabase();
+    res.json({ success: true, message: "SQLite database successfully reset and re-seeded with CPCB baseline data." });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message });
+  }
 });
 
 // 1. AI Material Classification & Vision Scan Endpoint

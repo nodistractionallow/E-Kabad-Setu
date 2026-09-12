@@ -27,6 +27,8 @@ import { getLiveTrackingUrl, VERCEL_DOMAIN, VERCEL_BASE_URL } from '../utils/tra
 import { db } from '../lib/firebase';
 import { doc, onSnapshot, getDocFromServer } from 'firebase/firestore';
 import { useApp } from '../context/AppContext';
+import { fetchSqliteLotById, updateLotInSqlite } from '../lib/sqliteClient';
+import { formatDisplayDateTime } from '../utils/dateTime';
 
 interface PublicOrderTrackingViewProps {
   orderId: string;
@@ -96,14 +98,55 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
     }
   }, [currentLot.weighbridgeWeightKg, currentLot.weightKg]);
 
+  // Hydrate from SQLite storage on mount or ID change
+  useEffect(() => {
+    const targetLotId = (orderId || lot?.id || currentLot.id).trim();
+    if (!targetLotId) return;
+
+    let isMounted = true;
+    fetchSqliteLotById(targetLotId).then((sqliteLot) => {
+      if (isMounted && sqliteLot) {
+        setCurrentLot((prev) => {
+          const isSqlitePaid = sqliteLot.status?.toLowerCase() === 'paid' || 
+                               Boolean(sqliteLot.paidAt) || 
+                               Boolean(sqliteLot.settlementUtr);
+          if (isSqlitePaid) {
+            return {
+              ...prev,
+              ...sqliteLot,
+              status: 'paid'
+            };
+          }
+          return { ...prev, ...sqliteLot };
+        });
+      }
+    }).catch(console.warn);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [orderId, lot?.id]);
+
   // Sync when prop lot or context lots update
   useEffect(() => {
     if (lot) {
-      setCurrentLot(lot);
+      setCurrentLot((prev) => {
+        const prevPaid = prev.status === 'paid' || Boolean(prev.paidAt) || Boolean(prev.settlementUtr);
+        if (prevPaid && lot.status !== 'paid') {
+          return { ...lot, status: 'paid', paidAt: prev.paidAt, settlementUtr: prev.settlementUtr };
+        }
+        return lot;
+      });
     } else {
       const match = lots.find((l) => l.id.toUpperCase() === (orderId || '').toUpperCase());
       if (match) {
-        setCurrentLot(match);
+        setCurrentLot((prev) => {
+          const prevPaid = prev.status === 'paid' || Boolean(prev.paidAt) || Boolean(prev.settlementUtr);
+          if (prevPaid && match.status !== 'paid') {
+            return { ...match, status: 'paid', paidAt: prev.paidAt, settlementUtr: prev.settlementUtr };
+          }
+          return match;
+        });
       }
     }
   }, [lot, lots, orderId]);
@@ -137,7 +180,25 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
           }
           previousStatusRef.current = updated.status;
 
-          setCurrentLot(updated);
+          // Never revert a paid lot back to pending via Firestore snapshot
+          setCurrentLot((prev) => {
+            const prevIsPaid = prev.status?.toLowerCase() === 'paid' || 
+                               Boolean(prev.paidAt) || 
+                               Boolean(prev.settlementUtr);
+            if (prevIsPaid && updated.status !== 'paid') {
+              return {
+                ...updated,
+                status: 'paid',
+                paidAt: prev.paidAt || updated.paidAt,
+                paidTimestamp: prev.paidTimestamp || updated.paidTimestamp,
+                settlementUtr: prev.settlementUtr || updated.settlementUtr,
+                weighbridgeWeightKg: prev.weighbridgeWeightKg || updated.weighbridgeWeightKg,
+                finalPayoutAmount: prev.finalPayoutAmount || updated.finalPayoutAmount,
+                paymentMode: prev.paymentMode || updated.paymentMode
+              };
+            }
+            return updated;
+          });
         }
       },
       (error) => {
@@ -158,13 +219,29 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
 
     setIsManualSyncing(true);
     try {
+      // 1. Sync from SQLite first
+      const sqliteRecord = await fetchSqliteLotById(targetLotId);
+      if (sqliteRecord) {
+        setCurrentLot((prev) => {
+          const isSqlitePaid = sqliteRecord.status === 'paid' || Boolean(sqliteRecord.paidAt) || Boolean(sqliteRecord.settlementUtr);
+          return isSqlitePaid ? { ...prev, ...sqliteRecord, status: 'paid' } : { ...prev, ...sqliteRecord };
+        });
+      }
+
+      // 2. Sync from Firestore
       const docRef = doc(db, 'lots', targetLotId);
       const snap = await getDocFromServer(docRef);
       if (snap.exists()) {
         const liveData = snap.data() as EWasteLot;
-        setCurrentLot({ ...liveData, id: snap.id });
-        playFeedbackChime('beep');
+        setCurrentLot((prev) => {
+          const prevPaid = prev.status === 'paid' || Boolean(prev.paidAt) || Boolean(prev.settlementUtr);
+          if (prevPaid && liveData.status !== 'paid') {
+            return { ...liveData, id: snap.id, status: 'paid', paidAt: prev.paidAt, settlementUtr: prev.settlementUtr };
+          }
+          return { ...liveData, id: snap.id };
+        });
       }
+      playFeedbackChime('beep');
       setLastSyncTime(new Date().toLocaleTimeString());
     } catch (err) {
       console.warn('Manual server fetch notice:', err);
@@ -188,27 +265,47 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
     window.print();
   };
 
+  // Determine stage progress robustly
+  const isPaid = displayLot.status?.toLowerCase() === 'paid' || 
+                 displayLot.status?.toLowerCase() === 'settled' ||
+                 Boolean(displayLot.paidAt) ||
+                 Boolean(displayLot.settlementUtr);
+  const isVerified = isPaid || displayLot.status === 'verified';
+  const isRejected = displayLot.status === 'rejected';
+  const effectiveWeight = displayLot.weighbridgeWeightKg || displayLot.weightKg;
+  const effectiveAmount = displayLot.finalPayoutAmount || (displayLot.weighbridgeWeightKg ? Math.round(displayLot.weighbridgeWeightKg * displayLot.ratePerKg) : displayLot.totalAmount);
+
   const handleAuthorityDisburse = async () => {
-    if (displayLot.status === 'paid') return;
+    if (isPaid) return;
     setIsDisbursing(true);
     try {
       const nowIso = new Date().toISOString();
       const nowMs = Date.now();
       const utr = `UTR-CPCB-${nowMs.toString().slice(-8)}`;
+      const payoutVal = Math.round(authorityWeightInput * displayLot.ratePerKg);
 
-      await approveAndPayLot(displayLot.id, authorityWeightInput, authorityPaymentMode);
-
-      setCurrentLot(prev => ({
-        ...prev,
+      const updatedPaidLot: EWasteLot = {
+        ...currentLot,
         status: 'paid',
         weighbridgeWeightKg: authorityWeightInput,
-        finalPayoutAmount: Math.round(authorityWeightInput * displayLot.ratePerKg),
+        finalPayoutAmount: payoutVal,
         paymentMode: authorityPaymentMode,
         eprCreditKg: authorityWeightInput,
         paidAt: nowIso,
         paidTimestamp: nowMs,
         settlementUtr: utr
-      }));
+      };
+
+      // 1. Immediately update local state so UI switches instantly to Paid (no paying again)
+      setCurrentLot(updatedPaidLot);
+      previousStatusRef.current = 'paid';
+
+      // 2. Persist to AppContext
+      await approveAndPayLot(displayLot.id, authorityWeightInput, authorityPaymentMode);
+
+      // 3. Direct SQLite write to ensure immediate relational persistence
+      await updateLotInSqlite(displayLot.id, updatedPaidLot);
+
       playFeedbackChime('success');
     } catch (err) {
       console.error('Disbursement error:', err);
@@ -216,13 +313,6 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
       setIsDisbursing(false);
     }
   };
-
-  // Determine stage progress
-  const isVerified = displayLot.status === 'verified' || displayLot.status === 'paid';
-  const isPaid = displayLot.status === 'paid';
-  const isRejected = displayLot.status === 'rejected';
-  const effectiveWeight = displayLot.weighbridgeWeightKg || displayLot.weightKg;
-  const effectiveAmount = displayLot.finalPayoutAmount || (displayLot.weighbridgeWeightKg ? Math.round(displayLot.weighbridgeWeightKg * displayLot.ratePerKg) : displayLot.totalAmount);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-16 animate-fadeIn">
@@ -330,8 +420,8 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
       {/* Main Container */}
       <main className="max-w-4xl mx-auto px-4 pt-6 space-y-6">
         
-        {/* Real-time Status Notification Banner if Paid */}
-        {isPaid && (
+        {/* Real-time Public Status Notification Banner if Paid (Citizen / Public view) */}
+        {!isAuthorityMode && isPaid && (
           <div className="bg-emerald-600 text-white rounded-3xl p-5 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border border-emerald-500 animate-fadeIn">
             <div className="flex items-center gap-3.5">
               <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">

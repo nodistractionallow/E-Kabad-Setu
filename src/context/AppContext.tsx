@@ -9,10 +9,29 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility, CategoryApprovalRequest, PartnerRegistration } from '../types';
+import { Language, UserRole, MaterialItem, EWasteLot, CollectorProfile, RecyclerFacility, CategoryApprovalRequest, PartnerRegistration, SqliteEngineStatus } from '../types';
 import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, MOCK_RECYCLER, INITIAL_CATEGORY_REQUESTS, INITIAL_PARTNER_REGISTRATIONS } from '../data/mockData';
 import { speakVoice, playFeedbackChime, stopVoice } from '../utils/speech';
 import { parseDateTimeToMs } from '../utils/dateTime';
+import {
+  fetchSqliteStatus,
+  fetchSqliteLots,
+  saveLotToSqlite,
+  updateLotInSqlite,
+  deleteLotFromSqlite,
+  fetchSqliteMaterials,
+  updateMaterialPriceInSqlite,
+  fetchSqliteCategoryRequests,
+  saveCategoryRequestToSqlite,
+  updateCategoryRequestInSqlite,
+  fetchSqlitePartners,
+  savePartnerToSqlite,
+  updatePartnerInSqlite,
+  fetchSqliteCollector,
+  saveCollectorToSqlite,
+  runSqliteQuery,
+  resetSqliteBackend
+} from '../lib/sqliteClient';
 
 interface AppContextType {
   currentView: UserRole;
@@ -53,6 +72,12 @@ interface AppContextType {
   speak: (text: string) => void;
   stopAudio: () => void;
   isFirebaseSyncing: boolean;
+  storageEngine: 'sqlite';
+  sqliteStatus: SqliteEngineStatus | null;
+  isSqliteReady: boolean;
+  refreshSqliteStatus: () => Promise<void>;
+  executeSqliteQuery: (query: string) => Promise<{ columns: string[]; rows: any[][]; error?: string }>;
+  resetSqliteDatabase: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -155,6 +180,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const hasInitializedFirebase = useRef(false);
   const isSyncingRef = useRef(false);
 
+  // SQLite Relational Storage State
+  const [sqliteStatus, setSqliteStatus] = useState<SqliteEngineStatus | null>(null);
+  const [isSqliteReady, setIsSqliteReady] = useState<boolean>(false);
+
+  const refreshSqliteStatus = async () => {
+    const status = await fetchSqliteStatus();
+    if (status) {
+      setSqliteStatus(status);
+      setIsSqliteReady(true);
+    }
+  };
+
+  // Hydrate from SQLite Embedded Backend on mount
+  useEffect(() => {
+    let isMounted = true;
+
+    const hydrateFromSqlite = async () => {
+      try {
+        const [status, sLots, sMats, sCats, sPartners, sCollector] = await Promise.all([
+          fetchSqliteStatus(),
+          fetchSqliteLots(),
+          fetchSqliteMaterials(),
+          fetchSqliteCategoryRequests(),
+          fetchSqlitePartners(),
+          fetchSqliteCollector()
+        ]);
+
+        if (!isMounted) return;
+
+        if (status) {
+          setSqliteStatus(status);
+          setIsSqliteReady(true);
+        }
+        if (sLots && Array.isArray(sLots) && sLots.length > 0) {
+          setLots(sLots);
+        }
+        if (sMats && Array.isArray(sMats) && sMats.length > 0) {
+          setMaterials(sMats);
+        }
+        if (sCats && Array.isArray(sCats) && sCats.length > 0) {
+          setCategoryRequests(sCats);
+        }
+        if (sPartners && Array.isArray(sPartners) && sPartners.length > 0) {
+          setPartnerRegistrations(sPartners);
+        }
+        if (sCollector) {
+          setCollector(sCollector);
+        }
+      } catch (err) {
+        console.warn('[SQLite Hydration] Notice:', err);
+      }
+    };
+
+    hydrateFromSqlite();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Sync state to local storage as high-speed instant fallback
   useEffect(() => {
     try {
@@ -248,9 +333,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           });
 
-          // Sort by creation descending (newest first)
-          loadedLots.sort((a, b) => parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp));
-          setLots(loadedLots);
+          // Sort and merge ensuring paid status is never reverted by stale Firestore cache
+          setLots((prev) => {
+            const prevMap: Map<string, EWasteLot> = new Map(prev.map((p) => [p.id.toUpperCase(), p]));
+            const merged: EWasteLot[] = loadedLots.map((remote) => {
+              const local = prevMap.get(remote.id.toUpperCase());
+              if (local && (local.status === 'paid' || local.settlementUtr || local.paidAt) && remote.status !== 'paid') {
+                return { ...remote, ...local, status: 'paid' as const };
+              }
+              return remote;
+            });
+            const remoteIds = new Set<string>(loadedLots.map((l) => l.id.toUpperCase()));
+            for (const [id, local] of prevMap.entries()) {
+              if (!remoteIds.has(id)) {
+                merged.push(local);
+              }
+            }
+            return merged.sort((a, b) => {
+              const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.timestamp);
+              const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.timestamp);
+              return timeB - timeA;
+            });
+          });
           setIsFirebaseSyncing(false);
         } else if (!hasInitializedFirebase.current) {
           // Initialize Firestore with default mock lots if remote database is blank
@@ -406,6 +510,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Error saving lot to Firestore, saved to offline cache:', err);
     }
 
+    // Persist to SQLite Relational Backend
+    saveLotToSqlite(newLot).then(refreshSqliteStatus).catch(console.warn);
+    saveCollectorToSqlite(updatedCollector).catch(console.warn);
+
     playFeedbackChime('success');
     return newLot;
   };
@@ -502,6 +610,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Firestore update error, cached locally:', err);
     }
 
+    // Persist to SQLite Relational Backend
+    if (updatedLot) {
+      try {
+        await updateLotInSqlite(lotId, updatedLot);
+        await refreshSqliteStatus();
+      } catch (sqlErr) {
+        console.warn('SQLite persistence error in approveAndPayLot:', sqlErr);
+      }
+    }
+    if (matchedLot && matchedLot.collectorId === collector.id) {
+      saveCollectorToSqlite(updatedCollector).catch(console.warn);
+    }
+
     playFeedbackChime('success');
   };
 
@@ -536,6 +657,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Firestore rejectLot error, cached locally:', err);
     }
+
+    // Persist to SQLite
+    updateLotInSqlite(lotId, {
+      status: 'rejected',
+      anomalyFlag: true,
+      anomalyReason: reason
+    }).then(refreshSqliteStatus).catch(console.warn);
 
     playFeedbackChime('warning');
   };
@@ -595,6 +723,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     } catch (err) {
       console.warn('Firestore requestNewCategory error:', err);
+    }
+
+    // Persist to SQLite
+    saveCategoryRequestToSqlite(newRequest).then(refreshSqliteStatus).catch(console.warn);
+    if (reqData.lotId) {
+      updateLotInSqlite(reqData.lotId, {
+        isOutOfCategory: true,
+        isPendingCategoryApproval: true,
+        requestedCategoryName: reqData.categoryName,
+        ratePerKg: 0,
+        totalAmount: 0
+      }).catch(console.warn);
     }
 
     playFeedbackChime('success');
@@ -694,6 +834,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (err) {
         console.warn('Firestore approveCategoryRequest error:', err);
       }
+
+      // SQLite update
+      updateCategoryRequestInSqlite(requestId, {
+        status: 'approved',
+        approvedRatePerKg,
+        assignedStandardCategory,
+        reviewNotes,
+        reviewedBy
+      }).then(refreshSqliteStatus).catch(console.warn);
+
+      if (targetReq.lotId) {
+        updateLotInSqlite(targetReq.lotId, {
+          ratePerKg: approvedRatePerKg,
+          category: assignedStandardCategory,
+          isPendingCategoryApproval: false,
+          isOutOfCategory: false
+        }).catch(console.warn);
+      }
     }
 
     playFeedbackChime('success');
@@ -757,6 +915,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Firestore rejectCategoryRequest error:', err);
     }
 
+    // Persist to SQLite
+    updateCategoryRequestInSqlite(requestId, {
+      status: 'rejected',
+      rejectionReason,
+      reviewedBy
+    }).then(refreshSqliteStatus).catch(console.warn);
+
+    if (targetReq?.lotId) {
+      updateLotInSqlite(targetReq.lotId, {
+        status: 'rejected',
+        anomalyFlag: true,
+        anomalyReason: `Category rejected by CPCB Authority: ${rejectionReason}`
+      }).catch(console.warn);
+    }
+
     playFeedbackChime('warning');
   };
 
@@ -783,6 +956,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Firestore reopenLot error, cached locally:', err);
     }
+
+    // Persist to SQLite
+    updateLotInSqlite(lotId, {
+      status: 'pending',
+      anomalyFlag: true
+    }).then(refreshSqliteStatus).catch(console.warn);
 
     playFeedbackChime('beep');
   };
@@ -825,6 +1004,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Firestore overrideAnomalyLot error:', err);
     }
+
+    // Persist to SQLite
+    if (updatedAnomalyLot) {
+      updateLotInSqlite(lotId, updatedAnomalyLot).then(refreshSqliteStatus).catch(console.warn);
+    }
+
     playFeedbackChime('success');
   };
 
@@ -863,6 +1048,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Firestore rejectAnomalyLot error:', err);
     }
+
+    // Persist to SQLite
+    if (updatedRejectedLot) {
+      updateLotInSqlite(lotId, updatedRejectedLot).then(refreshSqliteStatus).catch(console.warn);
+    }
+
     playFeedbackChime('warning');
   };
 
@@ -879,6 +1070,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Firestore deleteLotWithKey error:', err);
     }
+
+    // Persist to SQLite
+    deleteLotFromSqlite(lotId, adminKey).then(refreshSqliteStatus).catch(console.warn);
 
     playFeedbackChime('beep');
     return true;
@@ -918,6 +1112,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Firestore partner registration notice:', err);
     }
+
+    // Persist to SQLite
+    savePartnerToSqlite(newReg).then(refreshSqliteStatus).catch(console.warn);
 
     playFeedbackChime('success');
     return newReg;
@@ -966,6 +1163,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Firestore approvePartner error:', err);
     }
+
+    // Persist to SQLite
+    updatePartnerInSqlite(registrationId, {
+      status: 'APPROVED',
+      approvedDate: nowStr,
+      approvedBy: officerName,
+      assignedCpcbPartnerId: cpcbId
+    }).then(refreshSqliteStatus).catch(console.warn);
+
     playFeedbackChime('success');
   };
 
@@ -998,6 +1204,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.warn('Firestore rejectPartner error:', err);
     }
+
+    // Persist to SQLite
+    updatePartnerInSqlite(registrationId, {
+      status: 'REJECTED',
+      rejectionReason: reason
+    }).then(refreshSqliteStatus).catch(console.warn);
+
     playFeedbackChime('warning');
   };
 
@@ -1107,6 +1320,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Firestore updateMaterialPrice error:', err);
     }
 
+    // Persist to SQLite
+    updateMaterialPriceInSqlite(materialId, newPrice).then(refreshSqliteStatus).catch(console.warn);
+
     playFeedbackChime('beep');
   };
 
@@ -1156,6 +1372,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Firestore resetAllData notice:', err);
     }
 
+    // Reset SQLite relational database
+    try {
+      await resetSqliteBackend();
+      await refreshSqliteStatus();
+    } catch (err) {
+      console.warn('SQLite reset error:', err);
+    }
+
     playFeedbackChime('beep');
   };
 
@@ -1199,7 +1423,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resetAllData,
         speak,
         stopAudio,
-        isFirebaseSyncing
+        isFirebaseSyncing,
+        storageEngine: 'sqlite',
+        sqliteStatus,
+        isSqliteReady,
+        refreshSqliteStatus,
+        executeSqliteQuery: runSqliteQuery,
+        resetSqliteDatabase: async () => {
+          await resetSqliteBackend();
+          await refreshSqliteStatus();
+        }
       }}
     >
       {children}
