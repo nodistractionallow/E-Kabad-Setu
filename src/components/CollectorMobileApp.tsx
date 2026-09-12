@@ -721,9 +721,12 @@ export const CollectorMobileApp: React.FC = () => {
                     key={mat.id}
                     className="bg-white border border-slate-200 hover:border-emerald-500 rounded-2xl p-4 shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
                   >
-                    <div>
+                    <div className="cursor-pointer" onClick={() => { playFeedbackChime('beep'); setSelectedGraphMaterial(mat); }}>
                       <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <h4 className="text-base font-bold text-slate-900 leading-snug">{matName}</h4>
+                        <h4 className="text-base font-bold text-slate-900 leading-snug hover:text-emerald-700 transition-colors flex items-center gap-1.5">
+                          <span>{matName}</span>
+                          <span className="text-[10px] font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-1.5 py-0.2 rounded-full">📊</span>
+                        </h4>
                         {mat.hazardLevel === 'high' && (
                           <span className="text-[10px] bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-full font-mono uppercase font-bold">
                             Hazard
@@ -731,12 +734,12 @@ export const CollectorMobileApp: React.FC = () => {
                         )}
                       </div>
                       <div className="text-xs text-slate-500 font-mono mb-3">
-                        Grade: <span className="font-semibold text-slate-700">{mat.grade}</span>
+                        Grade: <span className="font-semibold text-slate-700">{mat.grade}</span> • <span className="text-teal-700 underline font-semibold">{language === 'hi' ? 'ग्राफ देखें' : language === 'mr' ? 'आलेख पहा' : 'Tap for Graph'}</span>
                       </div>
                     </div>
 
                     <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-2">
-                      <div>
+                      <div className="cursor-pointer" onClick={() => { playFeedbackChime('beep'); setSelectedGraphMaterial(mat); }}>
                         <div className="text-xl font-mono font-black text-emerald-700">
                           ₹{mat.pricePerKg}
                           <span className="text-xs text-slate-500 font-normal">/kg</span>
@@ -747,7 +750,7 @@ export const CollectorMobileApp: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         {/* Audio Rate Player */}
                         <button
                           type="button"
@@ -755,10 +758,24 @@ export const CollectorMobileApp: React.FC = () => {
                             playFeedbackChime('beep');
                             speak(audioDesc);
                           }}
-                          className="w-9 h-9 rounded-xl bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 flex items-center justify-center transition-colors shadow-xs cursor-pointer"
+                          className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700 border border-slate-200 flex items-center justify-center transition-colors shadow-xs cursor-pointer"
                           title="Listen to rate"
                         >
-                          <Volume2 className="w-4 h-4" />
+                          <Volume2 className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* 7-Day Simple Vernacular Price Graph Button */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('beep');
+                            setSelectedGraphMaterial(mat);
+                          }}
+                          className="px-2.5 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                          title="7-Day Simple Price Graph"
+                        >
+                          <BarChart2 className="w-3.5 h-3.5 text-teal-600" />
+                          <span>{language === 'hi' ? 'ग्राफ' : language === 'mr' ? 'आलेख' : 'Graph'}</span>
                         </button>
 
                         {/* Gemini AI Insights Button */}
@@ -768,7 +785,7 @@ export const CollectorMobileApp: React.FC = () => {
                             playFeedbackChime('beep');
                             setSelectedAiInsightsMaterial(mat);
                           }}
-                          className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+                          className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
                           title="Gemini AI Market Intelligence"
                         >
                           <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
