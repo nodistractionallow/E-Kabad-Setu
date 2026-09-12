@@ -21,6 +21,7 @@ import {
   getSyncQueue,
   mapSupabaseRowToLot,
 } from '../services/syncService';
+import { updateLotInSqlite } from '../lib/sqliteClient';
 
 interface AppContextType {
   currentView: UserRole;
@@ -70,7 +71,8 @@ const STORAGE_KEYS = {
   COLLECTOR: 'ekabad_collector_v1',
   ONLINE: 'ekabad_online_v1',
   AUTH_SESSION: 'ekabad_auth_session_v1',
-  RECYCLE_BIN: 'ekabad_govt_recycle_bin_v1'
+  RECYCLE_BIN: 'ekabad_govt_recycle_bin_v1',
+  PAID_LOTS: 'ekabad_paid_lots_v1'
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -134,7 +136,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [lots, setLots] = useState<EWasteLot[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEYS.LOTS);
-      return stored ? JSON.parse(stored) : INITIAL_LOTS;
+      const parsed: EWasteLot[] = stored ? JSON.parse(stored) : INITIAL_LOTS;
+      const paidRaw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
+      const paidMap: Record<string, Partial<EWasteLot>> = paidRaw ? JSON.parse(paidRaw) : {};
+
+      const merged = parsed.map((lot) => {
+        const paidOverride = paidMap[lot.id.toUpperCase()] || paidMap[lot.id];
+        if (paidOverride) {
+          return {
+            ...lot,
+            ...paidOverride,
+            status: 'paid' as const
+          };
+        }
+        return lot;
+      });
+
+      // Also ensure any paid lot present in paidMap exists in the list
+      Object.keys(paidMap).forEach((idKey) => {
+        const p = paidMap[idKey];
+        if (p && p.id && !merged.some((m) => m.id.toUpperCase() === idKey.toUpperCase())) {
+          merged.unshift(p as EWasteLot);
+        }
+      });
+
+      return merged;
     } catch {
       return INITIAL_LOTS;
     }
@@ -269,18 +295,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const lotsCollectionRef = collection(db, 'lots');
       unsubscribeLots = onSnapshot(lotsCollectionRef, async (snapshot) => {
         if (!snapshot.empty) {
+          let paidMap: Record<string, Partial<EWasteLot>> = {};
+          try {
+            const paidRaw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
+            if (paidRaw) paidMap = JSON.parse(paidRaw);
+          } catch (e) {
+            console.warn(e);
+          }
+
           const loadedLots: EWasteLot[] = [];
           snapshot.forEach((docSnap) => {
             const data = docSnap.data() as EWasteLot;
+            const docId = docSnap.id;
+            const paidOverride = paidMap[docId.toUpperCase()] || paidMap[docId];
+            const isPaid = data.status === 'paid' || Boolean(paidOverride);
+
             loadedLots.push({
               ...data,
-              id: docSnap.id
+              ...(paidOverride || {}),
+              id: docId,
+              status: isPaid ? 'paid' : (data.status || 'pending')
             });
+          });
+
+          // Retain any locally paid lots that might not yet be present in the Firestore snapshot
+          Object.keys(paidMap).forEach((idKey) => {
+            const p = paidMap[idKey];
+            if (p && p.id && !loadedLots.some((l) => l.id.toUpperCase() === idKey.toUpperCase())) {
+              loadedLots.unshift(p as EWasteLot);
+            }
           });
 
           // Sort by creation or natural descending order
           loadedLots.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
           setLots(loadedLots);
+          try {
+            localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(loadedLots));
+          } catch (e) {
+            console.warn(e);
+          }
           setIsFirebaseSyncing(false);
         } else if (!hasInitializedFirebase.current) {
           // Initialize Firestore with default mock lots if remote database is blank
@@ -449,31 +502,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const approveAndPayLot = async (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH', overrideRatePerKg?: number): Promise<void> => {
-    let updatedLot: EWasteLot | undefined;
-    const matchedLot = lots.find((l) => l.id === lotId);
+    const cleanId = (lotId || '').trim();
+    if (!cleanId) return;
+
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const utr = `UTR-CPCB-${nowMs.toString().slice(-8)}`;
+
+    const matchedLot = lots.find((l) => l.id.toUpperCase() === cleanId.toUpperCase());
     const effectiveRate = (overrideRatePerKg && overrideRatePerKg > 0) 
       ? overrideRatePerKg 
       : (matchedLot?.ratePerKg && matchedLot.ratePerKg > 0 ? matchedLot.ratePerKg : 120);
     const finalPayout = Math.round(weighbridgeWeightKg * effectiveRate);
 
-    setLots((prev) =>
-      prev.map((lot) => {
-        if (lot.id === lotId) {
-          updatedLot = {
-            ...lot,
-            ratePerKg: effectiveRate,
-            status: 'paid',
-            weighbridgeWeightKg,
-            finalPayoutAmount: finalPayout,
-            paymentMode,
-            eprCreditKg: weighbridgeWeightKg
-          };
-          return updatedLot;
+    const updatedPaidLot: EWasteLot = {
+      ...(matchedLot || {
+        id: cleanId,
+        collectorId: collector.id,
+        collectorName: collector.name,
+        materialId: 'mat_pcb_high',
+        materialName: 'High-Grade Server & Telecom Motherboard',
+        category: 'pcb',
+        weightKg: weighbridgeWeightKg,
+        ratePerKg: effectiveRate,
+        totalAmount: finalPayout,
+        timestamp: nowIso
+      }),
+      ratePerKg: effectiveRate,
+      status: 'paid',
+      weighbridgeWeightKg,
+      finalPayoutAmount: finalPayout,
+      paymentMode,
+      eprCreditKg: weighbridgeWeightKg,
+      paidAt: nowIso,
+      paidTimestamp: nowMs,
+      settlementUtr: utr
+    };
+
+    // 1. Immediately store in persistent PAID_LOTS map in localStorage
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
+      const map: Record<string, Partial<EWasteLot>> = raw ? JSON.parse(raw) : {};
+      map[cleanId.toUpperCase()] = updatedPaidLot;
+      map[cleanId] = updatedPaidLot;
+      localStorage.setItem(STORAGE_KEYS.PAID_LOTS, JSON.stringify(map));
+    } catch (e) {
+      console.warn('Failed to update PAID_LOTS in storage:', e);
+    }
+
+    // 2. Immediately update lots state & STORAGE_KEYS.LOTS
+    setLots((prev) => {
+      let found = false;
+      const nextLots = prev.map((lot) => {
+        if (lot.id.toUpperCase() === cleanId.toUpperCase()) {
+          found = true;
+          return updatedPaidLot;
         }
         return lot;
-      })
-    );
+      });
+      if (!found) {
+        nextLots.unshift(updatedPaidLot);
+      }
+      try {
+        localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(nextLots));
+      } catch (e) {
+        console.warn(e);
+      }
+      return nextLots;
+    });
 
+    // 3. Update collector earnings
     let updatedCollector = collector;
     if (matchedLot && matchedLot.collectorId === collector.id) {
       updatedCollector = {
@@ -481,45 +579,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         todayEarnings: collector.todayEarnings + finalPayout
       };
       setCollector(updatedCollector);
+      try {
+        localStorage.setItem(STORAGE_KEYS.COLLECTOR, JSON.stringify(updatedCollector));
+      } catch (e) {
+        console.warn(e);
+      }
     }
 
-    // Persist to Firebase Firestore
+    // 4. Save to Firestore using setDoc with merge: true (never fails with document not found)
     try {
-      if (updatedLot) {
-        const lotRef = doc(db, 'lots', lotId);
-        await updateDoc(lotRef, {
-          status: 'paid',
-          weighbridgeWeightKg,
-          finalPayoutAmount: Math.round(weighbridgeWeightKg * updatedLot.ratePerKg),
-          paymentMode,
-          eprCreditKg: weighbridgeWeightKg
-        });
-      }
+      const lotRef = doc(db, 'lots', cleanId);
+      await setDoc(lotRef, updatedPaidLot, { merge: true });
+
       if (matchedLot && matchedLot.collectorId === collector.id) {
         const collectorRef = doc(db, 'collectors', collector.id);
-        await updateDoc(collectorRef, {
-          todayEarnings: updatedCollector.todayEarnings
-        });
+        await setDoc(collectorRef, { todayEarnings: updatedCollector.todayEarnings }, { merge: true });
       }
     } catch (err) {
       console.warn('Firestore update error, cached locally:', err);
     }
 
-    // Persist to Supabase offline sync queue
-    if (updatedLot) {
-      enqueueSyncAction('lots', 'update', lotId, updatedLot);
-      enqueueSyncAction('transactions', 'insert', `TXN-${lotId}`, {
-        id: `TXN-${lotId}`,
-        lot_id: lotId,
-        collector_id: matchedLot?.collectorId || collector.id,
-        weighbridge_weight_kg: weighbridgeWeightKg,
-        rate_per_kg: updatedLot.ratePerKg,
-        payout_amount: updatedLot.finalPayoutAmount || 0,
-        payment_mode: paymentMode,
-        payment_status: 'completed',
-        epr_credit_generated_kg: weighbridgeWeightKg,
-      });
+    // 5. Save to SQLite database backend
+    try {
+      await updateLotInSqlite(cleanId, updatedPaidLot);
+    } catch (err) {
+      console.warn('SQLite lot payment update error:', err);
     }
+
+    // 6. Offline sync queue
+    enqueueSyncAction('lots', 'update', cleanId, updatedPaidLot);
+    enqueueSyncAction('transactions', 'insert', `TXN-${cleanId}`, {
+      id: `TXN-${cleanId}`,
+      lot_id: cleanId,
+      collector_id: matchedLot?.collectorId || collector.id,
+      weighbridge_weight_kg: weighbridgeWeightKg,
+      rate_per_kg: effectiveRate,
+      payout_amount: finalPayout,
+      payment_mode: paymentMode,
+      payment_status: 'completed',
+      epr_credit_generated_kg: weighbridgeWeightKg,
+    });
     enqueueSyncAction('collectors', 'update', collector.id, updatedCollector);
     setPendingSyncCount(getSyncQueue().length);
 

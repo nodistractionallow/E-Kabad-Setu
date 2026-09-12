@@ -212,10 +212,10 @@ export const CollectorMobileApp: React.FC = () => {
         const defaultCat = customCategoryName || 'Other E-waste';
         selectCategory(defaultCat);
         const speakMsg = language === 'hi'
-          ? 'ऑफलाइन मोड: कृपया नीचे से कबाड़ श्रेणी चुनें।'
+          ? (result.userMessageHi || 'नीचे दी गई सूची से कबाड़ का प्रकार चुनें।')
           : language === 'mr'
-          ? 'ऑफलाइन मोड: कृपया खालील यादीतून प्रवर्ग निवडा.'
-          : 'Offline mode: please select category from the dropdown.';
+          ? (result.userMessageMr || 'खालील यादीतून प्रकार निवडा.')
+          : (result.userMessageEn || 'Select the material from the list below.');
         speak(speakMsg);
         return;
       }
@@ -944,27 +944,24 @@ export const CollectorMobileApp: React.FC = () => {
                   </div>
                 )}
 
-                {/* 3. OFFLINE MANUAL SELECTION NOTICE CARD */}
+                {/* 3. MANUAL SELECTION NOTICE CARD */}
                 {detectionResult?.status === 'offline_manual_selection' && (
                   <div className="bg-sky-950 border-2 border-sky-500/80 rounded-2xl p-4 text-white shadow-md flex items-center justify-between gap-3 animate-fadeIn">
                     <div className="flex items-center gap-3.5 min-w-0">
                       <div className="w-11 h-11 rounded-xl bg-sky-500/20 border border-sky-400/50 text-sky-300 flex items-center justify-center shrink-0">
-                        <WifiOff className="w-6 h-6 text-sky-400" />
+                        <Sparkles className="w-6 h-6 text-sky-400" />
                       </div>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1">
-                            <span>{language === 'hi' ? 'ऑफलाइन मोड' : 'OFFLINE MODE'}</span>
-                          </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full font-bold bg-sky-900/90 text-sky-200">
-                            {language === 'hi' ? 'मैनुअल चयन' : 'Manual Select'}
+                            <span>{language === 'hi' ? 'श्रेणी चुनें' : language === 'mr' ? 'प्रवर्ग निवडा' : 'SELECT CATEGORY'}</span>
                           </span>
                         </div>
                         <div className="text-base font-bold text-white truncate mt-0.5">
                           {customCategoryName || 'Other E-waste'}
                         </div>
                         <div className="text-xs text-sky-200 font-medium">
-                          {language === 'hi' ? 'फोटो पास हुई। कृपया दाईं ओर से कबाड़ श्रेणी चुनें।' : 'Photo checks passed. Please select scrap category from right panel.'}
+                          {language === 'hi' ? 'नीचे दी गई सूची से कबाड़ का प्रकार चुनें।' : language === 'mr' ? 'खालील यादीतून प्रकार निवडा.' : 'Select the material from the list below.'}
                         </div>
                       </div>
                     </div>

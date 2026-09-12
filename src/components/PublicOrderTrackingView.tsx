@@ -17,16 +17,17 @@ import {
   FileText,
   CreditCard,
   Award,
-  RefreshCw,
-  Zap,
-  CheckCheck
+  RefreshCw, 
+  Zap, 
+  CheckCheck,
+  Globe
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { EWasteLot } from '../types';
 import { playFeedbackChime } from '../utils/speech';
 import { getLiveTrackingUrl, VERCEL_DOMAIN, VERCEL_BASE_URL } from '../utils/trackingUrl';
 import { db } from '../lib/firebase';
-import { doc, onSnapshot, getDocFromServer } from 'firebase/firestore';
+import { doc, onSnapshot, getDocFromServer, setDoc } from 'firebase/firestore';
 import { useApp } from '../context/AppContext';
 import { fetchSqliteLotById, updateLotInSqlite } from '../lib/sqliteClient';
 import { formatDisplayDateTime } from '../utils/dateTime';
@@ -49,10 +50,33 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
   const [lastSyncTime, setLastSyncTime] = useState<string>('Connecting...');
 
   // Check if viewing from an authority role or url param
+  const isScrapCollector = currentView === 'collector';
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const isAuthorityFromUrl = urlParams?.get('authority') === '1' || urlParams?.get('auth') === 'true';
-  const isAuthorityRole = currentView === 'recycler' || currentView === 'government' || isAuthorityFromUrl;
+  const isAuthorityRole = !isScrapCollector && (currentView === 'recycler' || currentView === 'government' || isAuthorityFromUrl);
   const [isAuthorityMode, setIsAuthorityMode] = useState<boolean>(isAuthorityRole);
+
+  useEffect(() => {
+    if (isScrapCollector) {
+      setIsAuthorityMode(false);
+    } else if (isAuthorityRole) {
+      setIsAuthorityMode(true);
+    }
+  }, [currentView, isScrapCollector, isAuthorityRole]);
+
+  // Helper to read persistent paid data from localStorage
+  const getStoredPaidData = (id: string): Partial<EWasteLot> | null => {
+    try {
+      const raw = localStorage.getItem('ekabad_paid_lots_v1');
+      if (raw) {
+        const map = JSON.parse(raw);
+        return map[id.toUpperCase()] || map[id] || null;
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+    return null;
+  };
 
   // Fallback demo mock if lot not yet loaded
   const defaultFallbackLot: EWasteLot = {
@@ -77,9 +101,18 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
   };
 
   const [currentLot, setCurrentLot] = useState<EWasteLot>(() => {
-    if (lot) return lot;
-    const contextMatch = lots.find((l) => l.id.toUpperCase() === (orderId || '').toUpperCase());
-    return contextMatch || defaultFallbackLot;
+    const rawId = (orderId || lot?.id || '').trim();
+    const paidOverride = getStoredPaidData(rawId);
+    const contextMatch = lots.find((l) => l.id.toUpperCase() === rawId.toUpperCase());
+    const base = lot || contextMatch || defaultFallbackLot;
+    if (paidOverride) {
+      return {
+        ...base,
+        ...paidOverride,
+        status: 'paid' as const
+      };
+    }
+    return base;
   });
 
   const [authorityWeightInput, setAuthorityWeightInput] = useState<number>(() => {
@@ -136,11 +169,20 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
 
   // Sync when prop lot or context lots update
   useEffect(() => {
+    const targetId = (orderId || lot?.id || currentLot.id).trim();
+    const paidOverride = getStoredPaidData(targetId);
+
     if (lot) {
       setCurrentLot((prev) => {
-        const prevPaid = prev.status === 'paid' || Boolean(prev.paidAt) || Boolean(prev.settlementUtr);
-        if (prevPaid && lot.status !== 'paid') {
-          return { ...lot, status: 'paid', paidAt: prev.paidAt, settlementUtr: prev.settlementUtr };
+        const prevPaid = prev.status === 'paid' || Boolean(prev.paidAt) || Boolean(prev.settlementUtr) || Boolean(paidOverride);
+        if (prevPaid) {
+          return {
+            ...lot,
+            ...(paidOverride || {}),
+            status: 'paid',
+            paidAt: prev.paidAt || paidOverride?.paidAt,
+            settlementUtr: prev.settlementUtr || paidOverride?.settlementUtr
+          };
         }
         return lot;
       });
@@ -148,9 +190,15 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
       const match = lots.find((l) => l.id.toUpperCase() === (orderId || '').toUpperCase());
       if (match) {
         setCurrentLot((prev) => {
-          const prevPaid = prev.status === 'paid' || Boolean(prev.paidAt) || Boolean(prev.settlementUtr);
-          if (prevPaid && match.status !== 'paid') {
-            return { ...match, status: 'paid', paidAt: prev.paidAt, settlementUtr: prev.settlementUtr };
+          const prevPaid = prev.status === 'paid' || Boolean(prev.paidAt) || Boolean(prev.settlementUtr) || Boolean(paidOverride);
+          if (prevPaid) {
+            return {
+              ...match,
+              ...(paidOverride || {}),
+              status: 'paid',
+              paidAt: prev.paidAt || paidOverride?.paidAt,
+              settlementUtr: prev.settlementUtr || paidOverride?.settlementUtr
+            };
           }
           return match;
         });
@@ -187,21 +235,26 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
           }
           previousStatusRef.current = updated.status;
 
+          const paidOverride = getStoredPaidData(targetLotId);
+
           // Never revert a paid lot back to pending via Firestore snapshot
           setCurrentLot((prev) => {
-            const prevIsPaid = prev.status?.toLowerCase() === 'paid' || 
-                               Boolean(prev.paidAt) || 
-                               Boolean(prev.settlementUtr);
-            if (prevIsPaid && updated.status !== 'paid') {
+            const isLocalOrPrevPaid = prev.status?.toLowerCase() === 'paid' || 
+                                      Boolean(prev.paidAt) || 
+                                      Boolean(prev.settlementUtr) ||
+                                      Boolean(paidOverride);
+
+            if (isLocalOrPrevPaid || updated.status === 'paid') {
               return {
                 ...updated,
+                ...(paidOverride || {}),
                 status: 'paid',
-                paidAt: prev.paidAt || updated.paidAt,
-                paidTimestamp: prev.paidTimestamp || updated.paidTimestamp,
-                settlementUtr: prev.settlementUtr || updated.settlementUtr,
-                weighbridgeWeightKg: prev.weighbridgeWeightKg || updated.weighbridgeWeightKg,
-                finalPayoutAmount: prev.finalPayoutAmount || updated.finalPayoutAmount,
-                paymentMode: prev.paymentMode || updated.paymentMode
+                paidAt: prev.paidAt || updated.paidAt || paidOverride?.paidAt,
+                paidTimestamp: prev.paidTimestamp || updated.paidTimestamp || paidOverride?.paidTimestamp,
+                settlementUtr: prev.settlementUtr || updated.settlementUtr || paidOverride?.settlementUtr,
+                weighbridgeWeightKg: prev.weighbridgeWeightKg || updated.weighbridgeWeightKg || paidOverride?.weighbridgeWeightKg,
+                finalPayoutAmount: prev.finalPayoutAmount || updated.finalPayoutAmount || paidOverride?.finalPayoutAmount,
+                paymentMode: prev.paymentMode || updated.paymentMode || paidOverride?.paymentMode
               };
             }
             return updated;
@@ -305,14 +358,33 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
         settlementUtr: utr
       };
 
-      // 1. Immediately update local state so UI switches instantly to Paid (no paying again)
+      // 1. Immediately store in persistent PAID_LOTS map in localStorage
+      try {
+        const raw = localStorage.getItem('ekabad_paid_lots_v1');
+        const map = raw ? JSON.parse(raw) : {};
+        map[displayLot.id.toUpperCase()] = updatedPaidLot;
+        map[displayLot.id] = updatedPaidLot;
+        localStorage.setItem('ekabad_paid_lots_v1', JSON.stringify(map));
+      } catch (e) {
+        console.warn('Failed to update PAID_LOTS in storage:', e);
+      }
+
+      // 2. Immediately update local state so UI switches instantly to Paid (no paying again)
       setCurrentLot(updatedPaidLot);
       previousStatusRef.current = 'paid';
 
-      // 2. Persist to AppContext
+      // 3. Persist to AppContext
       await approveAndPayLot(displayLot.id, authorityWeightInput, authorityPaymentMode, effectiveRate);
 
-      // 3. Direct SQLite write to ensure immediate relational persistence
+      // 4. Direct Firestore setDoc with merge: true (so it creates/updates and never throws error)
+      try {
+        const lotRef = doc(db, 'lots', displayLot.id);
+        await setDoc(lotRef, updatedPaidLot, { merge: true });
+      } catch (err) {
+        console.warn('Direct Firestore write in view:', err);
+      }
+
+      // 5. Direct SQLite write to ensure immediate relational persistence
       await updateLotInSqlite(displayLot.id, updatedPaidLot);
 
       playFeedbackChime('success');

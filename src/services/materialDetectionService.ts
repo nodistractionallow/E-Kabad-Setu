@@ -7,6 +7,7 @@ import {
   CategoryConfidenceScore
 } from '../types/materialDetection';
 import { INITIAL_MATERIALS } from '../data/mockData';
+import { classifyWithGeminiVision } from './geminiVisionService';
 
 export class MaterialDetectionService {
   private static instance: MaterialDetectionService;
@@ -56,7 +57,7 @@ export class MaterialDetectionService {
    * Rule 2: Reject if clear human face (selfie / portrait) is detected
    * Does NOT reject for slight blur or normal scrap hardware.
    */
-  public assessQuality(canvas: HTMLCanvasElement): QualityGateResult {
+  public async assessQuality(canvas: HTMLCanvasElement): Promise<QualityGateResult> {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) {
       return {
@@ -99,7 +100,33 @@ export class MaterialDetectionService {
       };
     }
 
-    // Downsample for fast facial geometry analysis
+    // --- RULE 2: NATIVE BROWSER / CANVAS HUMAN FACE DETECTION ---
+    // 1. Try native browser FaceDetector API (supported on Chrome/Android)
+    if (typeof window !== 'undefined' && 'FaceDetector' in window) {
+      try {
+        const detector = new (window as any).FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+        const faces = await detector.detect(canvas);
+        if (faces && faces.length > 0) {
+          const f = faces[0].boundingBox;
+          // Must occupy at least 20% of image dimensions (clear human face facing camera)
+          if (f && f.width >= width * 0.20 && f.height >= height * 0.20) {
+            return {
+              passed: false,
+              rejectionReason: 'FACE_DETECTED',
+              rejectionMessageEn: 'Please do not include human face in the photo.',
+              rejectionMessageHi: 'कृपया फोटो में चेहरा न लाएं। केवल कबाड़ का फोटो लें।',
+              rejectionMessageMr: 'कृपया फोटोमध्ये मानवी चेहरा आणू नका. फक्त भंगाराचा फोटो घ्या.',
+              metrics: { brightness: Math.round(avgBrightness), blurScore: 50, faceConfidence: 0.99, objectDensity: 0.5 }
+            };
+          }
+        }
+      } catch (err) {
+        // Fall back to canvas analysis
+      }
+    }
+
+    // 2. Ultra-simple Canvas fallback:
+    // Only triggers on prominent oval skin clusters; copper wires, red cords and scrap are ignored
     const sampleW = 160;
     const sampleH = 120;
     const gray = new Float32Array(sampleW * sampleH);
@@ -115,9 +142,6 @@ export class MaterialDetectionService {
       }
     }
 
-    // --- RULE 2: NON-AGGRESSIVE HUMAN FACE DETECTION ---
-    // Only rejects when a clear human face is in view.
-    // Copper wires, red cables, plastic bodies, and packaging will NEVER trigger this.
     const faceResult = this.detectHumanFace(data, width, height, gray, sampleW, sampleH);
     if (faceResult.isFaceDetected) {
       return {
@@ -185,8 +209,8 @@ export class MaterialDetectionService {
         const sumRgb = r + g + b;
         if (sumRgb < 120 || sumRgb > 720) continue;
         const rRatio = r / sumRgb;
-        // Copper wires are heavily red-saturated (rRatio > 0.54)
-        if (rRatio > 0.54) continue;
+        // Copper wires are heavily red-saturated (rRatio > 0.53)
+        if (rRatio > 0.53) continue;
 
         // YCbCr chrominance conversion
         const cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 128;
@@ -272,9 +296,10 @@ export class MaterialDetectionService {
 
   /**
    * SIMPLIFIED & RELIABLE MATERIAL DETECTION FLOW:
-   * 1. Run basic quality gate (Too Dark & Clear Human Face only)
-   * 2. If online: call Gemini API to classify into one of the 8 categories
-   * 3. If offline (or Gemini fails): return 'offline_manual_selection' so user selects from dropdown
+   * 1. Basic quality gate (Too Dark & Clear Human Face only)
+   * 2. If online: call Gemini 2.5 Flash directly from browser
+   * 3. If matched to 1 of 7 specific categories: pre-select and announce
+   * 4. If unmatched, "Other E-waste", or offline: calm prompt "Select the material from the list below."
    */
   public async detectMaterial(
     imageSource: string | HTMLCanvasElement,
@@ -291,7 +316,7 @@ export class MaterialDetectionService {
     }
 
     // 2. Quality Gate Check (Too dark & Face only)
-    const quality = this.assessQuality(canvas);
+    const quality = await this.assessQuality(canvas);
     if (!quality.passed && !options?.bypassQualityGate) {
       const inferenceTime = Math.round(performance.now() - startTime);
       return {
@@ -308,23 +333,60 @@ export class MaterialDetectionService {
       };
     }
 
-    // 3. Online Mode: If internet is available, call Gemini API
+    // 3. Online Mode: Call Gemini 2.5 Flash API directly from browser
     const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     if (isOnline) {
       try {
         const imageBase64 = canvas.toDataURL('image/jpeg', 0.88);
-        const cloudResult = await this.consultCloudFallback(imageBase64, options?.language || 'hi');
-        if (cloudResult.success && cloudResult.status === 'valid_material') {
-          return cloudResult;
+        const geminiRes = await classifyWithGeminiVision(imageBase64);
+
+        if (geminiRes.success && geminiRes.isEWaste && geminiRes.category !== 'Other E-waste') {
+          const cat = geminiRes.category;
+          const details = this.getCategoryCommercialMetadata(cat);
+          const inferenceTime = Math.round(performance.now() - startTime);
+
+          return {
+            success: true,
+            status: 'valid_material',
+            predictedCategory: cat,
+            confidenceScore: geminiRes.confidenceScore || 92,
+            isAutoClassifiedOther: false,
+            userMessageEn: `${cat} identified by Gemini AI (${geminiRes.confidenceScore || 92}% confidence).`,
+            userMessageHi: `${this.getHindiCategoryName(cat)} पहचाना गया (${geminiRes.confidenceScore || 92}% विश्वास)।`,
+            userMessageMr: `${this.getMarathiCategoryName(cat)} ओळखले गेले (${geminiRes.confidenceScore || 92}% विश्वास).`,
+            suggestedRatePerKg: geminiRes.suggestedRatePerKg || details.pricePerKg,
+            grade: geminiRes.grade || details.grade,
+            hazardLevel: geminiRes.hazardLevel || details.hazardLevel,
+            hazardWarningEn: geminiRes.hazardWarning_en || details.hazardWarningEn,
+            hazardWarningHi: geminiRes.hazardWarning_hi || details.hazardWarningHi,
+            safeActionEn: geminiRes.safeAction_en || details.safeActionEn,
+            safeActionHi: geminiRes.safeAction_hi || details.safeActionHi,
+            crmYield: details.crmYield,
+            source: 'cloud-gemini-fallback',
+            inferenceTimeMs: inferenceTime,
+            isOffline: false
+          };
         }
       } catch (geminiErr) {
-        console.warn('Gemini online classification failed, falling back to manual selection:', geminiErr);
+        console.warn('Direct Gemini call failed, trying server fallback:', geminiErr);
+        try {
+          const imageBase64 = canvas.toDataURL('image/jpeg', 0.88);
+          const serverRes = await this.consultCloudFallback(imageBase64, options?.language || 'hi');
+          if (serverRes.success && serverRes.status === 'valid_material' && serverRes.predictedCategory !== 'Other E-waste') {
+            return serverRes;
+          }
+        } catch {
+          // ignore
+        }
       }
     }
 
-    // 4. Offline Mode (or when network is unavailable):
-    // Do NOT attempt complex color guessing.
-    // Allow user to manually select from the 8 categories in dropdown!
+    // 4. If category did not match 1-7, or if offline, or if Gemini returned Other E-waste:
+    // Prompt the user to select the category manually.
+    // Exact requested vernacular voice:
+    // English: "Select the material from the list below."
+    // Hindi: "नीचे दी गई सूची से कबाड़ का प्रकार चुनें।"
+    // Marathi: "खालील यादीतून प्रकार निवडा."
     const inferenceTime = Math.round(performance.now() - startTime);
     return {
       success: true,
@@ -332,14 +394,14 @@ export class MaterialDetectionService {
       predictedCategory: 'Other E-waste',
       confidenceScore: 0,
       isAutoClassifiedOther: true,
-      userMessageEn: 'Offline Mode: Please select scrap category from the dropdown below.',
-      userMessageHi: 'ऑफलाइन मोड: कृपया नीचे दी गई सूची से कबाड़ श्रेणी चुनें।',
-      userMessageMr: 'ऑफलाइन मोड: कृपया खालील यादीतून प्रकार निवडा.',
+      userMessageEn: 'Select the material from the list below.',
+      userMessageHi: 'नीचे दी गई सूची से कबाड़ का प्रकार चुनें।',
+      userMessageMr: 'खालील यादीतून प्रकार निवडा.',
       qualityMetrics: quality.metrics,
       suggestedRatePerKg: 0,
       source: 'on-device-tflite',
       inferenceTimeMs: inferenceTime,
-      isOffline: true
+      isOffline: !isOnline
     };
   }
 
@@ -668,9 +730,9 @@ export class MaterialDetectionService {
       predictedCategory: 'Other E-waste',
       confidenceScore: 0,
       isAutoClassifiedOther: true,
-      userMessageEn: 'Please select scrap category from dropdown.',
-      userMessageHi: 'कृपया नीचे दी गई सूची से कबाड़ श्रेणी चुनें।',
-      userMessageMr: 'कृपया खालील यादीतून प्रकार निवडा.',
+      userMessageEn: 'Select the material from the list below.',
+      userMessageHi: 'नीचे दी गई सूची से कबाड़ का प्रकार चुनें।',
+      userMessageMr: 'खालील यादीतून प्रकार निवडा.',
       source: 'cloud-gemini-fallback',
       inferenceTimeMs: Math.round(performance.now() - startTime),
       isOffline: true

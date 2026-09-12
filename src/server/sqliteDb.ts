@@ -1,8 +1,8 @@
 import initSqlJs from "sql.js";
 import fs from "fs";
 import path from "path";
-import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, INITIAL_CATEGORY_REQUESTS, INITIAL_PARTNER_REGISTRATIONS } from "../data/mockData.js";
-import type { EWasteLot, MaterialItem, CategoryApprovalRequest, PartnerRegistration, CollectorProfile } from "../types.js";
+import { INITIAL_MATERIALS, INITIAL_LOTS, MOCK_COLLECTOR, INITIAL_CATEGORY_REQUESTS, INITIAL_PARTNER_REGISTRATIONS } from "../data/mockData";
+import type { EWasteLot, MaterialItem, CategoryApprovalRequest, PartnerRegistration, CollectorProfile } from "../types";
 
 let sqlInstance: any = null;
 let db: any = null;
