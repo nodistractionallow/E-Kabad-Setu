@@ -364,7 +364,13 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
         const raw = localStorage.getItem('ekabad_paid_lots_v1');
         const map = raw ? JSON.parse(raw) : {};
         map[displayLot.id.toUpperCase()] = updatedPaidLot;
+        map[displayLot.id.toLowerCase()] = updatedPaidLot;
         map[displayLot.id] = updatedPaidLot;
+        if (orderId) {
+          map[orderId.toUpperCase()] = updatedPaidLot;
+          map[orderId.toLowerCase()] = updatedPaidLot;
+          map[orderId] = updatedPaidLot;
+        }
         localStorage.setItem('ekabad_paid_lots_v1', JSON.stringify(map));
       } catch (e) {
         console.warn('Failed to update PAID_LOTS in storage:', e);
