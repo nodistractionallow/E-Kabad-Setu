@@ -19,7 +19,7 @@ import {
 import { playFeedbackChime } from '../utils/speech';
 
 export const OnboardingGateway: React.FC = () => {
-  const { language, setLanguage, setCurrentView, collector, setCollector, speak } = useApp();
+  const { language, setLanguage, setCurrentView, collector, setCollector, speak, login, authSession } = useApp();
 
   // Active portal mode: 'collector' (default) or 'recycler'
   const [activePortal, setActivePortal] = useState<'collector' | 'recycler'>('collector');
@@ -124,7 +124,7 @@ export const OnboardingGateway: React.FC = () => {
       return;
     }
     playFeedbackChime('success');
-    setCurrentView('recycler');
+    login('recycler', { cpcbId });
   };
 
   const translations = {
@@ -337,7 +337,7 @@ export const OnboardingGateway: React.FC = () => {
                 type="button"
                 onClick={() => {
                   playFeedbackChime('beep');
-                  setCurrentView('government');
+                  login('government');
                 }}
                 className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-full flex items-center gap-1.5 shadow-sm transition-all active:scale-95"
                 title="Open Government & CPCB Regulatory Research Portal"
@@ -628,7 +628,7 @@ export const OnboardingGateway: React.FC = () => {
                       type="button"
                       onClick={() => {
                         playFeedbackChime('success');
-                        setCurrentView('collector');
+                        login('collector', { id: collector.id, name: collector.name, phone: `+91 ${mobileNumber}` });
                       }}
                       className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-700/25 transition-transform active:scale-[0.99]"
                     >

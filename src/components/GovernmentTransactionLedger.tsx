@@ -31,9 +31,11 @@ import {
   Lock,
   Key,
   SlidersHorizontal,
-  X
+  X,
+  RotateCcw,
+  Archive
 } from 'lucide-react';
-import { RegulatoryAuthority, RecyclerFacility, TransactionRecord, EWasteLot } from '../types';
+import { RegulatoryAuthority, RecyclerFacility, TransactionRecord, EWasteLot, RecycledRecord } from '../types';
 import {
   REGULATORY_AUTHORITIES,
   NATIONAL_VENDOR_FACILITIES,
@@ -47,10 +49,10 @@ interface GovernmentTransactionLedgerProps {
   lots?: EWasteLot[];
 }
 
-type ExplorerMode = 'authorities' | 'vendors' | 'collectors' | 'all_transactions';
+type ExplorerMode = 'authorities' | 'vendors' | 'collectors' | 'all_transactions' | 'recycle_bin';
 
 export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerProps> = ({ lots = [] }) => {
-  const { deleteLotWithKey } = useApp();
+  const { deleteLotWithKey, restoreLot } = useApp();
 
   // Navigation & Folder State
   const [explorerMode, setExplorerMode] = useState<ExplorerMode>('authorities');
@@ -71,6 +73,17 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
       return new Set<string>();
     }
   });
+
+  // Statutory 12-Day Retention Safe-Deposit / Recycle Bin State
+  const [recycleBin, setRecycleBin] = useState<RecycledRecord[]>(() => {
+    try {
+      const stored = localStorage.getItem('ekabad_govt_recycle_bin_v1');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
   const [deleteModal, setDeleteModal] = useState<{
     isOpen: boolean;
     txn?: TransactionRecord;
@@ -98,29 +111,124 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
   // Transaction Inspection Drawer / Modal
   const [inspectingTxn, setInspectingTxn] = useState<TransactionRecord | null>(null);
 
-  // Government Key Delete Authorization Handler
+  // Helper to calculate countdown for mandatory 12-day retention
+  const getRetentionRemaining = (expiresAt: number) => {
+    const remainingMs = expiresAt - Date.now();
+    if (remainingMs <= 0) {
+      return { days: 0, hours: 0, text: 'Retention Expired (Statutory Period Elapsed)', isExpired: true };
+    }
+    const days = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+    const hours = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+    return {
+      days,
+      hours,
+      text: `${days}d ${hours}h remaining`,
+      isExpired: false
+    };
+  };
+
+  // Restore a record from the 12-day recycle bin back to active status
+  const handleRestoreRecord = async (item: RecycledRecord) => {
+    try {
+      // 1. Restore lot in AppContext if applicable
+      if (item.originalLotData) {
+        await restoreLot(item.originalLotData);
+      } else if (item.lotId) {
+        const tx = item.transactionData;
+        const reconstructedLot: EWasteLot = {
+          id: item.lotId,
+          category: tx.category || 'e-waste',
+          materialName: tx.materialName,
+          weightKg: tx.weighbridgeWeightKg || tx.declaredWeightKg || 5,
+          ratePerKg: tx.ratePerKg,
+          status: tx.paymentStatus === 'settled' ? 'verified' : 'pending',
+          timestamp: tx.timestamp || tx.date,
+          collectorName: tx.collectorName,
+          collectorPhone: tx.collectorPhone,
+          totalAmount: tx.totalAmount,
+          paymentMode: tx.paymentMode,
+          settlementUtr: tx.settlementUtr
+        };
+        await restoreLot(reconstructedLot);
+      }
+
+      // 2. Remove from deletedIds set
+      const newDeleted = new Set(deletedIds);
+      newDeleted.delete(item.transactionData.id);
+      if (item.lotId) newDeleted.delete(item.lotId);
+      setDeletedIds(newDeleted);
+
+      // 3. Remove from recycleBin state
+      const updatedBin = recycleBin.filter((r) => r.id !== item.id);
+      setRecycleBin(updatedBin);
+
+      // 4. Save to localStorage
+      localStorage.setItem('ekabad_deleted_gov_txns', JSON.stringify(Array.from(newDeleted)));
+      localStorage.setItem('ekabad_govt_recycle_bin_v1', JSON.stringify(updatedBin));
+
+      alert(`✅ Record ${item.transactionData.id} successfully restored to active records!`);
+    } catch (err) {
+      console.error('Error restoring record:', err);
+    }
+  };
+
+  // Clear expired records or empty recycle bin with confirmation
+  const handleEmptyRecycleBin = () => {
+    if (!window.confirm('Are you sure you want to permanently clear the Recycle Bin? Expired records will be permanently erased.')) {
+      return;
+    }
+    setRecycleBin([]);
+    try {
+      localStorage.removeItem('ekabad_govt_recycle_bin_v1');
+    } catch (e) {
+      console.warn('LocalStorage error:', e);
+    }
+  };
+
+  // Government Key Delete Authorization Handler (Moves to 12-Day Recycle Bin)
   const handleAuthorizeDelete = async () => {
     if (securityKeyInput.trim() !== '12345678') {
       setDeleteError('Invalid Security Key! Authorized Government Clearance Key "12345678" is required.');
       return;
     }
 
+    const now = Date.now();
+    const RETENTION_DAYS = 12;
+    const expiresAt = now + RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
     if (deleteModal.isPurgeAll) {
       const newDeleted = new Set(deletedIds);
+      const newRecycled: RecycledRecord[] = [];
+
       for (const tx of filteredTransactions) {
         newDeleted.add(tx.id);
         if (tx.lotId) {
           newDeleted.add(tx.lotId);
           await deleteLotWithKey(tx.lotId, '12345678');
         }
+        const originalLot = lots.find((l) => l.id === tx.lotId || l.id === tx.id);
+        newRecycled.push({
+          id: `REC-${now}-${tx.id}`,
+          lotId: tx.lotId,
+          transactionData: tx,
+          deletedAt: now,
+          retentionDays: RETENTION_DAYS,
+          expiresAt: expiresAt,
+          deletedByKey: '12345678',
+          originalLotData: originalLot
+        });
       }
       setDeletedIds(newDeleted);
+      const updatedBin = [...newRecycled, ...recycleBin];
+      setRecycleBin(updatedBin);
+
       try {
         localStorage.setItem('ekabad_deleted_gov_txns', JSON.stringify(Array.from(newDeleted)));
+        localStorage.setItem('ekabad_govt_recycle_bin_v1', JSON.stringify(updatedBin));
       } catch (e) {
         console.warn('LocalStorage error:', e);
       }
-      setDeleteSuccess(`Successfully purged records authorized by statutory key 12345678.`);
+      setDeleteSuccess(`Successfully deleted ${filteredTransactions.length} records into 12-day Statutory Recycle Bin.`);
     } else if (deleteModal.txn) {
       const target = deleteModal.txn;
       const newDeleted = new Set(deletedIds);
@@ -130,12 +238,29 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
         await deleteLotWithKey(target.lotId, '12345678');
       }
       setDeletedIds(newDeleted);
+
+      const originalLot = lots.find((l) => l.id === target.lotId || l.id === target.id);
+      const newRecycledItem: RecycledRecord = {
+        id: `REC-${now}-${target.id}`,
+        lotId: target.lotId,
+        transactionData: target,
+        deletedAt: now,
+        retentionDays: RETENTION_DAYS,
+        expiresAt: expiresAt,
+        deletedByKey: '12345678',
+        originalLotData: originalLot
+      };
+
+      const updatedBin = [newRecycledItem, ...recycleBin.filter((r) => r.transactionData.id !== target.id)];
+      setRecycleBin(updatedBin);
+
       try {
         localStorage.setItem('ekabad_deleted_gov_txns', JSON.stringify(Array.from(newDeleted)));
+        localStorage.setItem('ekabad_govt_recycle_bin_v1', JSON.stringify(updatedBin));
       } catch (e) {
         console.warn('LocalStorage error:', e);
       }
-      setDeleteSuccess(`Transaction record ${target.id} permanently purged with Key 12345678.`);
+      setDeleteSuccess(`Record ${target.id} deleted and placed in 12-day Statutory Recycle Bin.`);
     }
 
     setSecurityKeyInput('');
@@ -146,7 +271,6 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
     }, 1200);
   };
 
-  // Merge live app lots with national transaction log
   // Merge live app lots with national transaction log
   const allCombinedTransactions = useMemo(() => {
     // Transform lots from app state into transaction records safely with null guards
@@ -201,8 +325,17 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
       };
     });
 
-    return [...appLotsAsTxns, ...NATIONAL_TRANSACTIONS_LOG].filter((tx) => !deletedIds.has(tx.id) && !(tx.lotId && deletedIds.has(tx.lotId)));
-  }, [lots, deletedIds]);
+    const recycledTxnIds = new Set(recycleBin.map((r) => r.transactionData?.id).filter(Boolean));
+    const recycledLotIds = new Set(recycleBin.map((r) => r.lotId).filter(Boolean) as string[]);
+
+    return [...appLotsAsTxns, ...NATIONAL_TRANSACTIONS_LOG].filter(
+      (tx) =>
+        !deletedIds.has(tx.id) &&
+        !(tx.lotId && deletedIds.has(tx.lotId)) &&
+        !recycledTxnIds.has(tx.id) &&
+        !(tx.lotId && recycledLotIds.has(tx.lotId))
+    );
+  }, [lots, deletedIds, recycleBin]);
 
   // Filtered transactions based on breadcrumb folders and query
   const filteredTransactions = useMemo(() => {
@@ -448,13 +581,14 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
           </div>
         </div>
 
-        {/* View Mode Tabs (Authorities Folder / Vendors Folder / Flat Table) */}
+        {/* View Mode Tabs (Authorities Folder / Vendors Folder / Flat Table / Recycle Bin) */}
         <div className="flex items-center space-x-2 border-t border-slate-200 pt-4 mt-5 overflow-x-auto">
           {[
             { id: 'authorities', label: '1. Regulatory Authority Folders (SPCBs)', icon: Folder, count: REGULATORY_AUTHORITIES.length },
             { id: 'vendors', label: '2. Vendor / Recycler Plant Folders', icon: Building2, count: NATIONAL_VENDOR_FACILITIES.length },
             { id: 'collectors', label: '3. Collector Aggregator Directories', icon: User, count: summaryMetrics.uniqueCollectors },
-            { id: 'all_transactions', label: '4. Master All-Transactions Ledger', icon: Layers, count: allCombinedTransactions.length }
+            { id: 'all_transactions', label: '4. Master All-Transactions Ledger', icon: Layers, count: allCombinedTransactions.length },
+            { id: 'recycle_bin', label: '5. 🗑️ Statutory Recycle Bin (12-Day Safe Custody)', icon: Trash2, count: recycleBin.length }
           ].map((mode) => {
             const Icon = mode.icon;
             const isActive = explorerMode === mode.id;
@@ -464,19 +598,29 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
                 type="button"
                 onClick={() => {
                   setExplorerMode(mode.id as ExplorerMode);
-                  if (mode.id === 'all_transactions') {
+                  if (mode.id === 'all_transactions' || mode.id === 'recycle_bin') {
                     handleResetBreadcrumbs();
                   }
                 }}
                 className={`px-4 py-2 rounded-xl text-xs font-bold font-mono flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
                   isActive
-                    ? 'bg-emerald-600 text-white shadow-xs'
+                    ? mode.id === 'recycle_bin'
+                      ? 'bg-rose-600 text-white shadow-xs'
+                      : 'bg-emerald-600 text-white shadow-xs'
+                    : mode.id === 'recycle_bin'
+                    ? 'bg-rose-50 text-rose-700 hover:text-rose-900 hover:bg-rose-100 border border-rose-200'
                     : 'bg-slate-100 text-slate-700 hover:text-slate-900 hover:bg-slate-200 border border-slate-200'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
                 <span>{mode.label}</span>
-                <span className={`px-1.5 py-0.2 text-[10px] rounded-md ${isActive ? 'bg-emerald-700 text-white' : 'bg-white text-slate-700 border border-slate-200'}`}>
+                <span className={`px-1.5 py-0.2 text-[10px] rounded-md ${
+                  isActive
+                    ? 'bg-black/20 text-white'
+                    : mode.id === 'recycle_bin'
+                    ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                    : 'bg-white text-slate-700 border border-slate-200'
+                }`}>
                   {mode.count}
                 </span>
               </button>
@@ -735,10 +879,208 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
         </div>
       )}
 
-      {/* FILTER & SEARCH BAR */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-xs">
-        {/* Search Field */}
-        <div className="relative flex-1">
+      {/* MODE 5: STATUTORY 12-DAY RETENTION RECYCLE BIN VIEW */}
+      {explorerMode === 'recycle_bin' ? (
+        <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-xs space-y-6 p-5 sm:p-6">
+          {/* Recycle Bin Statutory Header */}
+          <div className="bg-rose-50/70 border border-rose-200 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 border border-rose-300 flex items-center justify-center text-rose-600 shrink-0 mt-0.5">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full bg-rose-200 text-rose-900 border border-rose-300 text-[10px] font-mono font-bold uppercase tracking-wider">
+                    Statutory 12-Day Safe Custody Protocol
+                  </span>
+                  <span className="text-xs text-slate-500 font-mono">
+                    CPCB Circular 2026/RET-12 Mandatory Hold
+                  </span>
+                </div>
+                <h2 className="text-lg font-black text-slate-900 mt-1 font-mono">
+                  Government Statutory Recycle Bin (12-Day Quarantine)
+                </h2>
+                <p className="text-xs text-slate-600 mt-1 max-w-2xl leading-relaxed">
+                  Records deleted from active portals using Clearance Key <code className="bg-white px-1.5 py-0.5 rounded border border-rose-200 font-bold text-rose-700">12345678</code> are held in this safe-custody archive for a mandatory 12 calendar days. Authorized officers can restore any record back to active state at any time during this quarantine window with zero data loss.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+              <button
+                type="button"
+                onClick={handleEmptyRecycleBin}
+                disabled={recycleBin.length === 0}
+                className="px-3.5 py-2 bg-white hover:bg-rose-100 text-slate-700 hover:text-rose-800 border border-slate-300 hover:border-rose-300 rounded-xl text-xs font-bold font-mono transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                title="Wipe expired items from quarantine"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Empty Expired Archive</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Recycle Bin Metrics */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+              <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Quarantined Records</div>
+              <div className="text-2xl font-black font-mono text-rose-700 mt-1">{recycleBin.length} Items</div>
+              <div className="text-[11px] text-slate-500 font-mono mt-0.5">Holding in regulatory safe custody</div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+              <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Total Quarantined Valuation</div>
+              <div className="text-2xl font-black font-mono text-slate-900 mt-1">
+                ₹{recycleBin.reduce((acc, r) => acc + (r.transactionData?.totalAmount || 0), 0).toLocaleString('en-IN')}
+              </div>
+              <div className="text-[11px] text-slate-500 font-mono mt-0.5">Disbursed transaction volume</div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+              <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Retention Guarantee</div>
+              <div className="text-2xl font-black font-mono text-emerald-700 mt-1">12 Days Active</div>
+              <div className="text-[11px] text-emerald-700 font-mono mt-0.5">1-click instant restoration available</div>
+            </div>
+          </div>
+
+          {/* Quarantined Records Table */}
+          <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
+            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <div className="text-xs font-bold font-mono text-slate-800 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-rose-600" />
+                <span>Quarantined Records Pending Retention Expiry ({recycleBin.length})</span>
+              </div>
+              <div className="text-[11px] text-slate-500 font-mono">
+                Mandatory 12-Day Countdown Active
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-slate-100 text-slate-600 uppercase tracking-wider border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Record / Lot ID</th>
+                    <th className="py-3 px-4">Material Grade</th>
+                    <th className="py-3 px-4">Facility & Collector</th>
+                    <th className="py-3 px-4">Mass & Valuation</th>
+                    <th className="py-3 px-4">Deleted Time & Key</th>
+                    <th className="py-3 px-4">Mandatory 12-Day Countdown</th>
+                    <th className="py-3 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {recycleBin.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-400 font-mono">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+                        Recycle Bin is currently empty. No records are pending statutory retention.
+                      </td>
+                    </tr>
+                  ) : (
+                    recycleBin.map((item) => {
+                      const retention = getRetentionRemaining(item.expiresAt);
+                      const totalMs = item.retentionDays * 24 * 60 * 60 * 1000;
+                      const pctRemaining = Math.max(0, Math.min(100, Math.round(((item.expiresAt - Date.now()) / totalMs) * 100)));
+
+                      return (
+                        <tr key={item.id} className="hover:bg-rose-50/30 transition-colors">
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <div className="font-bold text-slate-900">{item.transactionData?.id || item.id}</div>
+                            {item.lotId && (
+                              <div className="text-[10px] text-emerald-700 font-semibold mt-0.5">
+                                Lot: {item.lotId}
+                              </div>
+                            )}
+                            <div className="text-[9px] text-slate-400 font-mono mt-0.5">
+                              {item.transactionData?.settlementUtr || 'UTR-HOLD'}
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-slate-900">{item.transactionData?.materialName || 'E-Waste Item'}</div>
+                            <div className="text-[10px] text-slate-500 uppercase">{item.transactionData?.category || 'General'}</div>
+                          </td>
+
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-slate-800 truncate max-w-[160px]">
+                              {item.transactionData?.vendorName || 'Recycling Unit'}
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              Seller: {item.transactionData?.collectorName || 'Kabadiwala'}
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <div className="font-bold text-emerald-700">
+                              {item.transactionData?.weighbridgeWeightKg || item.transactionData?.declaredWeightKg || 0} kg
+                            </div>
+                            <div className="font-black text-amber-700 text-sm">
+                              ₹{(item.transactionData?.totalAmount || 0).toLocaleString('en-IN')}
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <div className="text-slate-800">
+                              {new Date(item.deletedAt).toLocaleDateString('en-GB')} {new Date(item.deletedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                            <div className="text-[10px] text-rose-700 font-bold mt-0.5 flex items-center gap-1">
+                              <Key className="w-3 h-3" />
+                              <span>Key: {item.deletedByKey}</span>
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap min-w-[190px]">
+                            <div className="flex items-center justify-between text-[11px] mb-1">
+                              <span className={`font-bold ${retention.isExpired ? 'text-rose-700' : 'text-slate-800'}`}>
+                                ⏱️ {retention.text}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {pctRemaining}%
+                              </span>
+                            </div>
+                            <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                              <div
+                                className={`h-2 rounded-full transition-all ${
+                                  pctRemaining > 50
+                                    ? 'bg-emerald-600'
+                                    : pctRemaining > 20
+                                    ? 'bg-amber-500'
+                                    : 'bg-rose-500'
+                                }`}
+                                style={{ width: `${pctRemaining}%` }}
+                              />
+                            </div>
+                            <div className="text-[9px] text-slate-400 mt-1">
+                              Retention until: {new Date(item.expiresAt).toLocaleDateString('en-GB')}
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => handleRestoreRecord(item)}
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-mono transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-xs"
+                              title="Restore this record back to active records immediately"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Restore Record / पूर्ववत करें</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* FILTER & SEARCH BAR */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-xs">
+            {/* Search Field */}
+            <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
@@ -1062,6 +1404,8 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
           </table>
         </div>
       </div>
+      )}
+      </>
       )}
 
       {/* TRANSACTION INSPECTION AUDIT TRAIL MODAL */}

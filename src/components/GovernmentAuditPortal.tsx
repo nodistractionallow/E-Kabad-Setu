@@ -25,7 +25,7 @@ import { UnitEconomicsModal } from './UnitEconomicsModal';
 import { playFeedbackChime } from '../utils/speech';
 
 export const GovernmentAuditPortal: React.FC = () => {
-  const { setCurrentView, lots, recycler } = useApp();
+  const { setCurrentView, logout, lots, recycler } = useApp();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'datasets' | 'field_research' | 'unit_economics' | 'state_audit'>('overview');
   const [showDatasetsModal, setShowDatasetsModal] = useState(false);
@@ -50,9 +50,9 @@ export const GovernmentAuditPortal: React.FC = () => {
             type="button"
             onClick={() => {
               playFeedbackChime('beep');
-              setCurrentView('gateway');
+              logout();
             }}
-            className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 transition-colors"
+            className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 transition-colors cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span>Return to Gateway</span>

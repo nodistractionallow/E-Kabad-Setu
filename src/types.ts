@@ -105,6 +105,7 @@ export interface RecyclerFacility {
   name: string;
   cpcbId: string;
   statePcb: string;
+  state?: string;
   location: string;
   city?: string;
   monthlyQuotaTons: number;
@@ -135,33 +136,44 @@ export interface RegulatoryAuthority {
 export interface TransactionRecord {
   id: string;
   lotId: string;
-  transactionRef: string;
-  type: 'PAYOUT' | 'EPR_TRANSFER' | 'SECURITY_REFUND' | 'GOV_INCENTIVE';
+  transactionRef?: string;
+  type?: 'PAYOUT' | 'EPR_TRANSFER' | 'SECURITY_REFUND' | 'GOV_INCENTIVE';
   collectorId?: string;
   collectorName?: string;
+  collectorPhone?: string;
+  collectorWard?: string;
+  collectorTier?: any;
   facilityId?: string;
   facilityName?: string;
   authorityCode?: string;
   authorityId?: string;
   vendorId?: string;
   vendorName?: string;
+  vendorCpcbId?: string;
   statePcb?: string;
   paymentStatus?: string;
   category?: string;
-  materialCategory: string;
+  materialCategory?: string;
   materialName: string;
-  weightKg: number;
+  weightKg?: number;
+  declaredWeightKg?: number;
+  weighbridgeWeightKg?: number;
   ratePerKg: number;
-  grossAmount: number;
-  statutoryDeduction: number;
-  netDisbursed: number;
-  paymentMode: 'UPI' | 'NEFT' | 'CASH' | 'ESCROW';
-  utrNumber: string;
+  grossAmount?: number;
+  statutoryDeduction?: number;
+  netDisbursed?: number;
+  totalAmount?: number;
+  paymentMode?: 'UPI' | 'NEFT' | 'CASH' | 'ESCROW' | string;
+  utrNumber?: string;
   settlementUtr?: string;
-  status: 'SETTLED' | 'PROCESSING' | 'FLAGGED';
-  timestamp: string;
+  status?: 'SETTLED' | 'PROCESSING' | 'FLAGGED' | string;
+  timestamp?: string;
   date?: string;
   gpsCoordinates?: string;
+  eprCreditGeneratedKg?: number;
+  eprCertificateNo?: string;
+  anomalyFlag?: boolean;
+  anomalyReason?: string;
 }
 
 export interface MaterialPriceTrend {
@@ -169,6 +181,7 @@ export interface MaterialPriceTrend {
   categoryName: string;
   code: string;
   currentFloorRate: number;
+  currentRate?: number;
   mandiAverageRate: number;
   priceDelta24h: number;
   high7d: number;

@@ -53,7 +53,8 @@ export const RecyclerErpDashboard: React.FC = () => {
     rejectLot, 
     reopenLot, 
     updateMaterialPrice, 
-    setCurrentView, 
+    setCurrentView,
+    logout,
     speak 
   } = useApp();
 
@@ -550,9 +551,9 @@ export const RecyclerErpDashboard: React.FC = () => {
               type="button"
               onClick={() => {
                 playFeedbackChime('beep');
-                setCurrentView('gateway');
+                logout();
               }}
-              className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:border-rose-200 text-slate-600 hover:text-rose-700 border border-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-rose-50 hover:border-rose-200 text-slate-600 hover:text-rose-700 border border-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>लॉगआउट</span>
