@@ -48,7 +48,7 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
   onOpenQrPass,
   onNavigateToScan
 }) => {
-  const { setActivePublicOrderId, rejectLot, speak } = useApp();
+  const { setActivePublicOrderId } = useApp();
   // Folder sub-tab: 'pending' | 'completed' | 'quarantined'
   const [activeFolder, setActiveFolder] = useState<'pending' | 'completed' | 'quarantined'>('pending');
 
@@ -68,11 +68,6 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
 
   // Selected Lot for Settlement Voucher Modal
   const [viewingVoucherLot, setViewingVoucherLot] = useState<EWasteLot | null>(null);
-
-  // Rejection Modal State for Collector
-  const [rejectingLot, setRejectingLot] = useState<EWasteLot | null>(null);
-  const [rejectReason, setRejectReason] = useState<string>('Consignment cancelled by collector prior to weighbridge gate-in');
-  const [isRejectSubmitting, setIsRejectSubmitting] = useState(false);
 
   // Filter lots belonging to this collector
   const collectorLots = useMemo(() => {
@@ -605,23 +600,6 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                               <span>Slip</span>
                             </button>
                           )}
-
-                          {/* Collector Consignment Rejection Button (for pending lots) */}
-                          {isPending && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                playFeedbackChime('warning');
-                                setRejectingLot(lot);
-                                setRejectReason('Consignment cancelled by collector prior to weighbridge gate-in');
-                              }}
-                              className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-bold border border-rose-200 flex items-center gap-1 transition-colors cursor-pointer"
-                              title="Reject / Cancel this scrap lot"
-                            >
-                              <Ban className="w-3 h-3 text-rose-600" />
-                              <span>Reject Lot</span>
-                            </button>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -940,124 +918,6 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
             >
               Close Voucher
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* Collector Rejection Confirmation Modal */}
-      {rejectingLot && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-md w-full p-5 shadow-2xl border border-rose-200 space-y-4 animate-scaleUp">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
-                  <Ban className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-extrabold text-slate-900">Cancel & Reject Consignment</h4>
-                  <p className="text-[10px] font-mono text-slate-500">Database Synchronized Rejection</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setRejectingLot(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Lot Summary Card */}
-            <div className="bg-rose-50/60 rounded-2xl p-3 border border-rose-100 space-y-1.5 text-xs font-mono">
-              <div className="flex justify-between">
-                <span className="text-slate-500">Lot ID:</span>
-                <span className="font-bold text-slate-900">{rejectingLot.id}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Material:</span>
-                <span className="font-bold text-slate-800">{rejectingLot.materialName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Declared Mass:</span>
-                <span className="font-bold text-slate-800">{rejectingLot.weightKg} kg (₹{rejectingLot.totalAmount.toLocaleString('en-IN')})</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Target Facility:</span>
-                <span className="font-bold text-slate-800 truncate max-w-[200px]">{rejectingLot.facilityName}</span>
-              </div>
-            </div>
-
-            {/* Reason Selection */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Reason for Consignment Rejection:
-              </label>
-              <div className="space-y-1.5 mb-2">
-                {[
-                  'Consignment cancelled by collector prior to weighbridge gate-in',
-                  'Declared weight / category measurement error',
-                  'Contaminated / Non-recyclable foreign items detected',
-                  'Physical tare scale mismatch detected by collector'
-                ].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => setRejectReason(preset)}
-                    className={`w-full text-left text-[11px] p-2 rounded-xl border transition-all ${
-                      rejectReason === preset
-                        ? 'bg-rose-100/70 border-rose-300 text-rose-900 font-bold'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-              <textarea
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="Or type specific rejection details..."
-                rows={2}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:border-rose-400 font-sans"
-              />
-            </div>
-
-            <p className="text-[10px] text-slate-500 leading-relaxed">
-              ⚠️ <strong>CPCB Statutory Notice:</strong> Rejecting this lot will move it to the Quarantined ledger and sync across SQLite, Cloud Firestore, and LocalStorage.
-            </p>
-
-            {/* Action Buttons */}
-            <div className="flex items-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setRejectingLot(null)}
-                disabled={isRejectSubmitting}
-                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
-              >
-                Keep Active
-              </button>
-              <button
-                type="button"
-                disabled={isRejectSubmitting || !rejectReason.trim()}
-                onClick={async () => {
-                  if (!rejectingLot) return;
-                  setIsRejectSubmitting(true);
-                  try {
-                    await rejectLot(rejectingLot.id, rejectReason.trim());
-                    speak(`Lot ${rejectingLot.id} has been cancelled and transferred to Quarantined ledger.`);
-                    setRejectingLot(null);
-                  } catch (e) {
-                    console.error('Error rejecting lot:', e);
-                  } finally {
-                    setIsRejectSubmitting(false);
-                  }
-                }}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-              >
-                <Ban className="w-3.5 h-3.5" />
-                <span>{isRejectSubmitting ? 'Syncing...' : 'Confirm Reject'}</span>
-              </button>
-            </div>
           </div>
         </div>
       )}

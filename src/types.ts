@@ -42,7 +42,7 @@ export interface EWasteLot {
   ratePerKg: number;
   totalAmount: number;
   status: 'pending' | 'verified' | 'paid' | 'rejected';
-  paymentMode?: 'UPI' | 'CASH';
+  paymentMode?: 'UPI' | 'CASH' | string;
   timestamp: string;
   gpsLocation: string;
   facilityId: string;
@@ -66,7 +66,7 @@ export interface EWasteLot {
   finalPayoutAmount?: number;
   eprCreditKg?: number;
   paidAt?: string;
-  paidTimestamp?: string;
+  paidTimestamp?: string | number;
   settlementUtr?: string;
   reopened?: boolean;
   reopenedAt?: string;
@@ -114,28 +114,40 @@ export interface RecyclerFacility {
   eprCreditsGeneratedTons: number;
   authorityId?: string;
   complianceRating?: number | string;
+  contactEmail?: string;
+  contactPhone?: string;
 }
 
 export interface RegulatoryAuthority {
   id: string;
   name: string;
+  fullName?: string;
   code: string;
   state: string;
   zone: string;
   headquarters: string;
-  authorizedOfficer: string;
-  designation: string;
-  contactEmail: string;
-  phone: string;
-  activeRecyclersMonitored: number;
-  registeredInformalCollectors: number;
-  eprCertificatesApprovedTons: number;
-  openGrievancesCount: number;
+  authorizedOfficer?: string;
+  nodalOfficer?: string;
+  designation?: string;
+  contactEmail?: string;
+  phone?: string;
+  activeRecyclersMonitored?: number;
+  registeredInformalCollectors?: number;
+  activeCollectorsCount?: number;
+  eprCertificatesApprovedTons?: number;
+  openGrievancesCount?: number;
+  status?: string;
+  activeVendorsCount?: number;
+  totalTradedTons?: number;
+  complianceScore?: number;
+  totalDisbursedCrores?: number;
 }
 
 export interface TransactionRecord {
   id: string;
   lotId: string;
+  materialId?: string;
+  photoUrl?: string;
   transactionRef?: string;
   type?: 'PAYOUT' | 'EPR_TRANSFER' | 'SECURITY_REFUND' | 'GOV_INCENTIVE';
   collectorId?: string;
@@ -177,17 +189,18 @@ export interface TransactionRecord {
 }
 
 export interface MaterialPriceTrend {
-  categoryId: string;
-  categoryName: string;
-  code: string;
-  currentFloorRate: number;
+  categoryId?: string;
+  categoryName?: string;
+  code?: string;
+  currentFloorRate?: number;
   currentRate?: number;
-  mandiAverageRate: number;
-  priceDelta24h: number;
-  high7d: number;
-  low7d: number;
-  lmeBenchmarkUsdPerTon: number;
-  lastRevisionDate: string;
+  cpcbFloorRate?: number;
+  mandiAverageRate?: number;
+  priceDelta24h?: number;
+  high7d?: number;
+  low7d?: number;
+  lmeBenchmarkUsdPerTon?: number;
+  lastRevisionDate?: string;
   materialId?: string;
   materialName?: string;
   materialName_hi?: string;
@@ -197,6 +210,12 @@ export interface MaterialPriceTrend {
   history1y?: any[];
   trend30dPct?: number;
   category?: string;
+  forecastNextMonth?: string;
+  forecastChangePct?: number;
+  volatilityIndex?: number;
+  low30d?: number;
+  high30d?: number;
+  crmComposition?: any;
 }
 
 export interface LotPricePoint {
@@ -243,6 +262,8 @@ export interface CategoryApprovalRequest {
   scrapCode: string;
   suggestedFloorRate: number;
   suggestedCeilingRate: number;
+  suggestedRatePerKg?: number;
+  assignedStandardCategory?: string;
   hazardClassification: 'safe' | 'medium' | 'high';
   crmYieldEstimated: {
     copperPct: number;
@@ -255,7 +276,7 @@ export interface CategoryApprovalRequest {
   submittedBy: string;
   submittedByName: string;
   submissionDate: string;
-  status: 'PENDING_AUDIT' | 'APPROVED' | 'REJECTED';
+  status: 'PENDING_AUDIT' | 'APPROVED' | 'REJECTED' | string;
   reviewOfficer?: string;
   reviewNotes?: string;
   approvalCertificateNo?: string;
@@ -288,7 +309,7 @@ export interface SqliteEngineStatus {
 
 export interface HelpDeskMessage {
   id: string;
-  senderRole: UserRole | 'system' | 'cpcb_officer';
+  senderRole: UserRole | 'system' | 'cpcb_officer' | 'bot' | 'agent' | string;
   senderName: string;
   timestamp: string;
   text: string;
@@ -296,17 +317,20 @@ export interface HelpDeskMessage {
 
 export interface HelpDeskTicket {
   id: string;
-  ticketNumber: string;
-  subject: string;
-  category: 'EPR_TRANSFER' | 'WEIGHBRIDGE' | 'PAYMENT' | 'CATEGORY_REGISTRATION' | 'ANOMALY_DISPUTE';
+  ticketNumber?: string;
+  subject?: string;
+  title?: string;
+  portalType?: string;
+  userPhone?: string;
+  category: 'EPR_TRANSFER' | 'WEIGHBRIDGE' | 'PAYMENT' | 'CATEGORY_REGISTRATION' | 'ANOMALY_DISPUTE' | 'weighbridge' | 'compliance' | 'rates' | 'settlement' | 'other' | string;
   userId: string;
   userName: string;
-  userRole: UserRole;
-  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'ESCALATED';
-  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+  userRole?: UserRole;
+  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'ESCALATED' | 'open' | 'agent_assigned' | 'resolved' | string;
+  priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | string;
   createdAt: string;
   updatedAt: string;
-  assignedAgentName: string;
+  assignedAgentName?: string;
   messages: HelpDeskMessage[];
 }
 

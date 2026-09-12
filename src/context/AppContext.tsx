@@ -499,7 +499,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addLot = async (lotData: Omit<EWasteLot, 'id' | 'timestamp' | 'status'>): Promise<EWasteLot> => {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const now = new Date();
-    const timeString = now.toLocaleDateString('en-GB') + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    let hours = now.getHours();
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12 || 12;
+    const timeString = `${year}-${month}-${day} ${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
 
     const newLot: EWasteLot = {
       ...lotData,

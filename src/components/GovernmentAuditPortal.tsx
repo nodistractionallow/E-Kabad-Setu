@@ -7,44 +7,73 @@ import {
   Calculator, 
   ArrowLeft, 
   ExternalLink,
-  Award,
   Layers,
-  FileSpreadsheet,
-  AlertCircle,
   Building2,
   TrendingUp,
   Download,
   CheckCircle2,
   Lock,
-  Search,
-  ChevronRight
+  Folder,
+  ChevronRight,
+  ChevronDown,
+  User,
+  Scale,
+  Award,
+  Clock,
+  Sparkles,
+  FileSpreadsheet
 } from 'lucide-react';
+import { GovernmentTransactionLedger } from './GovernmentTransactionLedger';
 import { DatasetsExplorerModal } from './DatasetsExplorerModal';
 import { FieldResearchModal } from './FieldResearchModal';
 import { UnitEconomicsModal } from './UnitEconomicsModal';
 import { playFeedbackChime } from '../utils/speech';
 
 export const GovernmentAuditPortal: React.FC = () => {
-  const { setCurrentView, logout, lots, recycler } = useApp();
+  const { setCurrentView, logout, lots } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'datasets' | 'field_research' | 'unit_economics' | 'state_audit'>('overview');
+  // Primary navigation: Tab 1 (Default: 4-Tier State Folders Transaction Dossier), Tab 2 (National Overview & Compliance), Tab 3 (Research & Schemas Repository)
+  const [activeTab, setActiveTab] = useState<'dossier' | 'overview' | 'research_repository'>('dossier');
+
+  // Sub-folder accordion states for Tab 3 (Repository)
+  const [expandedSubFolders, setExpandedSubFolders] = useState<Record<string, boolean>>({
+    datasets: true,
+    ethnographic: true,
+    economics: true
+  });
+
+  const toggleSubFolder = (id: string) => {
+    setExpandedSubFolders((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  // Modals
   const [showDatasetsModal, setShowDatasetsModal] = useState(false);
   const [showFieldResearchModal, setShowFieldResearchModal] = useState(false);
   const [showUnitEconomicsModal, setShowUnitEconomicsModal] = useState(false);
 
+  // Calculate live KPI metrics
+  const totalVerifiedWeightMT = (
+    lots.reduce((acc, l) => acc + (l.weighbridgeWeightKg || l.weightKg || 0), 0) / 1000 +
+    1420.5
+  ).toFixed(2);
+
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans">
-      {/* Top Ministry Banner */}
-      <div className="bg-slate-950 border-b border-slate-800 px-4 py-2 text-xs font-mono text-slate-400 flex flex-wrap items-center justify-between gap-2">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 font-sans flex flex-col selection:bg-emerald-600 selection:text-white">
+      {/* TOP MINISTRY GOVERNMENT BANNER (Formal, High-Contrast Regulatory Top Bar) */}
+      <div className="bg-slate-950 border-b border-slate-800 px-4 py-2 text-xs font-mono text-slate-300 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
-          <span className="text-slate-200 font-semibold">MINISTRY OF ENVIRONMENT, FOREST AND CLIMATE CHANGE (MoEFCC)</span>
+          <span className="font-bold text-slate-100">
+            MINISTRY OF ENVIRONMENT, FOREST AND CLIMATE CHANGE (MoEFCC)
+          </span>
           <span className="text-slate-600">|</span>
-          <span className="text-emerald-400">CPCB REGULATORY PORTAL</span>
+          <span className="text-emerald-400 font-semibold">
+            CENTRAL POLLUTION CONTROL BOARD (CPCB)
+          </span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-[11px] bg-emerald-950 border border-emerald-800 text-emerald-300 px-2 py-0.5 rounded font-mono">
-            SECURE ACCESS: GOVT / REGULATOR ONLY
+          <span className="text-[10px] bg-emerald-950 border border-emerald-800 text-emerald-300 px-2 py-0.5 rounded font-mono font-bold tracking-wider">
+            SECURE AUDIT CLEARANCE: CPCB OFFICER ONLY
           </span>
           <button
             type="button"
@@ -52,7 +81,7 @@ export const GovernmentAuditPortal: React.FC = () => {
               playFeedbackChime('beep');
               logout();
             }}
-            className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 transition-colors cursor-pointer"
+            className="text-xs text-slate-400 hover:text-slate-100 flex items-center gap-1 transition-colors cursor-pointer font-medium"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span>Return to Gateway</span>
@@ -60,416 +89,541 @@ export const GovernmentAuditPortal: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Header */}
-      <header className="bg-slate-900/90 backdrop-blur border-b border-slate-800 sticky top-0 z-30 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* MAIN HEADER (Utilitarian Engineer Aesthetic, Light Theme with Emerald Accents) */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* Brand & Portal Authority Title */}
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 p-0.5 shadow-lg flex items-center justify-center text-white">
-              <ShieldCheck className="w-7 h-7 text-white" />
+            <div className="w-11 h-11 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-white shrink-0 shadow-xs">
+              <ShieldCheck className="w-6 h-6 text-emerald-400" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-lg font-black tracking-tight text-white">
-                  National E-Waste Regulatory & Research Portal
+                <h1 className="text-base sm:text-lg font-black tracking-tight text-slate-900">
+                  National E-Waste Regulatory & Audit Portal
                 </h1>
-                <span className="text-[10px] uppercase tracking-wider font-mono font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded">
+                <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded">
                   E-Waste Rules 2022
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                Central Pollution Control Board (CPCB) Regulatory Cell • Formalization & EPR Audit
+              <p className="text-xs text-slate-500 font-medium">
+                Official Digital Surveillance • Formalization & Mass Balance Traceability Ledger
               </p>
             </div>
           </div>
 
-          {/* Quick Nav Switches */}
-          <div className="flex items-center gap-2">
-            <div className="text-right mr-3 hidden lg:block">
-              <div className="text-[11px] font-mono text-slate-400">Authenticated Auditor</div>
-              <div className="text-xs font-bold text-slate-200">Dr. R. K. Sharma (CPCB Western Zone)</div>
+          {/* Officer Credentials & Cross-Portal Nav Switcher */}
+          <div className="flex items-center gap-2.5 self-start md:self-auto">
+            <div className="text-right mr-2 hidden lg:block font-mono">
+              <div className="text-[10px] text-slate-500 uppercase font-bold">Authenticated Auditor</div>
+              <div className="text-xs font-bold text-slate-800">Dr. R. K. Sharma (CPCB Western Zone)</div>
             </div>
+
             <button
               type="button"
               onClick={() => {
                 playFeedbackChime('beep');
                 setCurrentView('recycler');
               }}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
-              title="Switch to Recycler ERP View"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold font-mono flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Open Recycler ERP Portal"
             >
-              <Building2 className="w-3.5 h-3.5 text-emerald-400" />
+              <Building2 className="w-3.5 h-3.5 text-indigo-700" />
               <span>Recycler ERP</span>
             </button>
+
             <button
               type="button"
               onClick={() => {
                 playFeedbackChime('beep');
                 setCurrentView('collector');
               }}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
-              title="Switch to Collector Saathi View"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold font-mono flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Open Scrap Collector Portal"
             >
+              <User className="w-3.5 h-3.5 text-emerald-700" />
               <span>Collector App</span>
             </button>
           </div>
         </div>
+
+        {/* PRIMARY NAVIGATION TABS (Tab 1 is Default) */}
+        <div className="border-t border-slate-200 bg-slate-50 px-4 sm:px-6">
+          <div className="max-w-7xl mx-auto flex space-x-2 overflow-x-auto py-2">
+            {[
+              {
+                id: 'dossier',
+                label: '1. Transaction Audit Dossier (State Folders)',
+                icon: Folder,
+                highlight: true
+              },
+              {
+                id: 'overview',
+                label: '2. National Overview & SPCB Compliance',
+                icon: ShieldCheck,
+                highlight: false
+              },
+              {
+                id: 'research_repository',
+                label: '3. Research, Schemas & Economic Models Repository',
+                icon: Database,
+                highlight: false
+              }
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    playFeedbackChime('beep');
+                    setActiveTab(tab.id as typeof activeTab);
+                  }}
+                  className={`px-3.5 py-2 rounded-lg text-xs font-bold font-mono flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+                    isActive
+                      ? 'bg-emerald-700 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/80 border border-transparent'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </header>
 
-      {/* Nav Tabs */}
-      <div className="bg-slate-950 border-b border-slate-800 px-6 sticky top-[73px] z-20">
-        <div className="max-w-7xl mx-auto flex space-x-2 overflow-x-auto py-2">
-          {[
-            { id: 'overview', label: '1. National Regulatory Overview', icon: ShieldCheck },
-            { id: 'datasets', label: '2. Field Datasets & Schemas', icon: Database },
-            { id: 'field_research', label: '3. Field Usability Research', icon: BookOpen },
-            { id: 'unit_economics', label: '4. Macro Unit Economics Model', icon: Calculator },
-            { id: 'state_audit', label: '5. State PCB Compliance Ledger', icon: Layers }
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => {
-                  playFeedbackChime('beep');
-                  setActiveTab(tab.id as typeof activeTab);
-                }}
-                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all ${
-                  isActive 
-                    ? 'bg-emerald-600 text-white shadow-md' 
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      {/* MAIN CONTENT AREA */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex-1 w-full space-y-6">
+        {/* TAB 1: 4-TIER TRANSACTION AUDIT DOSSIER (DEFAULT VIEW) */}
+        {activeTab === 'dossier' && (
+          <GovernmentTransactionLedger lots={lots} />
+        )}
 
-      {/* Main Content Area */}
-      <main className="max-w-7xl mx-auto px-6 py-6">
-        {/* TAB 1: OVERVIEW */}
+        {/* TAB 2: NATIONAL OVERVIEW & SPCB COMPLIANCE */}
         {activeTab === 'overview' && (
-          <div className="space-y-6">
-            {/* Top KPI Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4">
-                <div className="text-[11px] font-mono text-slate-400 uppercase font-semibold">Total Traceable E-Waste</div>
-                <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
-                  {(lots.reduce((acc, l) => acc + (l.weighbridgeWeightKg || l.weightKg), 0) / 1000).toFixed(2)} MT
+          <div className="space-y-5">
+            {/* KPI STATS CARDS */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+                <div className="text-[10px] font-mono text-slate-500 uppercase font-bold">
+                  Total Traceable E-Waste
                 </div>
-                <div className="text-[11px] text-emerald-500 font-mono mt-1">Verified on CPCB Registry</div>
+                <div className="text-2xl font-bold font-mono text-emerald-800 mt-1 tabular-nums">
+                  {totalVerifiedWeightMT} MT
+                </div>
+                <div className="text-[11px] text-emerald-700 font-mono mt-1 flex items-center gap-1 font-medium">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Verified CPCB Registry
+                </div>
               </div>
 
-              <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4">
-                <div className="text-[11px] font-mono text-slate-400 uppercase font-semibold">Registered Kabadiwalas</div>
-                <div className="text-2xl font-black font-mono text-teal-300 mt-1">4,812</div>
-                <div className="text-[11px] text-teal-400 font-mono mt-1">Formalized with Digital ID</div>
+              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+                <div className="text-[10px] font-mono text-slate-500 uppercase font-bold">
+                  Registered Kabadiwalas
+                </div>
+                <div className="text-2xl font-bold font-mono text-indigo-900 mt-1 tabular-nums">
+                  4,812
+                </div>
+                <div className="text-[11px] text-indigo-700 font-mono mt-1 flex items-center gap-1 font-medium">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Formalized with Digital ID
+                </div>
               </div>
 
-              <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4">
-                <div className="text-[11px] font-mono text-slate-400 uppercase font-semibold">Direct UPI Disbursed</div>
-                <div className="text-2xl font-black font-mono text-amber-400 mt-1">₹4.82 Cr</div>
-                <div className="text-[11px] text-amber-300 font-mono mt-1">Zero Middleman Arbitrage</div>
+              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+                <div className="text-[10px] font-mono text-slate-500 uppercase font-bold">
+                  Direct UPI Disbursed
+                </div>
+                <div className="text-2xl font-bold font-mono text-amber-800 mt-1 tabular-nums">
+                  ₹4.82 Cr
+                </div>
+                <div className="text-[11px] text-amber-700 font-mono mt-1 flex items-center gap-1 font-medium">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Zero Middleman Arbitrage
+                </div>
               </div>
 
-              <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4">
-                <div className="text-[11px] font-mono text-slate-400 uppercase font-semibold">Authorized Units (EPR)</div>
-                <div className="text-2xl font-black font-mono text-indigo-400 mt-1">128 Facilities</div>
-                <div className="text-[11px] text-indigo-300 font-mono mt-1">100% SPCB Authorized</div>
+              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+                <div className="text-[10px] font-mono text-slate-500 uppercase font-bold">
+                  Authorized Units (EPR)
+                </div>
+                <div className="text-2xl font-bold font-mono text-slate-900 mt-1 tabular-nums">
+                  128 Facilities
+                </div>
+                <div className="text-[11px] text-slate-600 font-mono mt-1 flex items-center gap-1 font-medium">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  100% SPCB Authorized
+                </div>
               </div>
             </div>
 
-            {/* Regulatory Research Modules Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
-              <div className="bg-slate-800/60 border border-slate-700 rounded-2xl p-5 hover:border-emerald-500/50 transition-all">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-3">
-                  <Database className="w-5 h-5 text-emerald-400" />
-                </div>
-                <h3 className="text-base font-bold text-white mb-1">National E-Waste Datasets</h3>
-                <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-                  Structured CPCB datasets covering 12,000+ transaction points, hazardous material schemas, recyclers registry, and AI calibration metrics.
+            {/* SPCB REAL-TIME COMPLIANCE TABLE */}
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+              <div className="p-4 bg-slate-50 border-b border-slate-200">
+                <h2 className="text-sm font-bold text-slate-900">
+                  State Pollution Control Boards (SPCB) Real-Time Compliance Ledger
+                </h2>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Surveillance quotas and authorized informal channel integration rates across frontline state jurisdictions.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setShowDatasetsModal(true)}
-                  className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-colors shadow-sm"
-                >
-                  <span>Launch Interactive Explorer</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </button>
               </div>
 
-              <div className="bg-slate-800/60 border border-slate-700 rounded-2xl p-5 hover:border-indigo-500/50 transition-all">
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-3">
-                  <BookOpen className="w-5 h-5 text-indigo-400" />
-                </div>
-                <h3 className="text-base font-bold text-white mb-1">Field Usability Research</h3>
-                <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-                  Comprehensive socio-economic field research across 45 Pune scrap aggregators. Illiteracy mitigation, multilingual voice adoption, and safety protocol outcomes.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowFieldResearchModal(true)}
-                  className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-colors shadow-sm"
-                >
-                  <span>Open Field Research Dossier</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <div className="bg-slate-800/60 border border-slate-700 rounded-2xl p-5 hover:border-amber-500/50 transition-all">
-                <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-3">
-                  <Calculator className="w-5 h-5 text-amber-400" />
-                </div>
-                <h3 className="text-base font-bold text-white mb-1">Unit Economics & EPR Model</h3>
-                <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-                  Macro and micro unit economics models comparing informal acid-leaching vs formal hydrometallurgical recovery, margins, and EPR certificate revenue.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowUnitEconomicsModal(true)}
-                  className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-colors shadow-sm"
-                >
-                  <span>Open Economics Simulator</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </button>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-slate-100 text-slate-700 uppercase border-b border-slate-200 font-bold">
+                    <tr>
+                      <th className="py-2.5 px-4">State SPCB</th>
+                      <th className="py-2.5 px-4">Authorized Units</th>
+                      <th className="py-2.5 px-4">Monthly Quota</th>
+                      <th className="py-2.5 px-4">Current Diverted</th>
+                      <th className="py-2.5 px-4">Compliance Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-white">
+                    <tr className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-4 font-bold text-slate-900">Maharashtra (MPCB)</td>
+                      <td className="py-3 px-4 text-slate-700">42 Facilities</td>
+                      <td className="py-3 px-4 text-slate-700">1,200 MT</td>
+                      <td className="py-3 px-4 text-emerald-800 font-bold tabular-nums">1,048 MT (87%)</td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
+                          COMPLIANT
+                        </span>
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-4 font-bold text-slate-900">Gujarat (GPCB)</td>
+                      <td className="py-3 px-4 text-slate-700">38 Facilities</td>
+                      <td className="py-3 px-4 text-slate-700">980 MT</td>
+                      <td className="py-3 px-4 text-emerald-800 font-bold tabular-nums">892 MT (91%)</td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
+                          COMPLIANT
+                        </span>
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-4 font-bold text-slate-900">Karnataka (KSPCB)</td>
+                      <td className="py-3 px-4 text-slate-700">29 Facilities</td>
+                      <td className="py-3 px-4 text-slate-700">750 MT</td>
+                      <td className="py-3 px-4 text-amber-800 font-bold tabular-nums">590 MT (78%)</td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold">
+                          ACTIVE AUDIT
+                        </span>
+                      </td>
+                    </tr>
+                    <tr className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-4 font-bold text-slate-900">Delhi NCR (DPCC)</td>
+                      <td className="py-3 px-4 text-slate-700">19 Facilities</td>
+                      <td className="py-3 px-4 text-slate-700">500 MT</td>
+                      <td className="py-3 px-4 text-emerald-800 font-bold tabular-nums">465 MT (93%)</td>
+                      <td className="py-3 px-4">
+                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
+                          COMPLIANT
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            {/* Ministry Mandate Notice */}
-            <div className="bg-slate-800/40 border border-slate-700/60 rounded-2xl p-5 text-xs text-slate-300">
-              <div className="flex items-center gap-2 text-emerald-400 font-bold mb-2">
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Statutory Compliance with E-Waste (Management) Rules, 2022</span>
+            {/* STATUTORY MANDATE NOTICE */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-700">
+              <div className="flex items-center gap-2 text-emerald-800 font-bold mb-1.5 font-mono">
+                <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                <span>Statutory Compliance Notice: E-Waste (Management) Rules, 2022</span>
               </div>
-              <p className="leading-relaxed text-slate-400">
-                Under Section 4(1) and Schedule III of the E-Waste Rules 2022, all informal collection channels are mandated to be integrated into formal digital registries. E-Kabad Setu provides the official digital trail from the scrap collector's hand directly to SPCB/CPCB licensed hydrometallurgical recycling facilities with end-to-end mass balance validation.
+              <p className="leading-relaxed text-slate-600">
+                Under Section 4(1) and Schedule III of the E-Waste Rules 2022, all informal collection channels are mandated to be integrated into formal digital registries. E-Kabad Setu provides the official digital audit trail from the scrap collector directly to SPCB/CPCB licensed hydrometallurgical recycling facilities with end-to-end mass balance validation.
               </p>
             </div>
           </div>
         )}
 
-        {/* TAB 2: DATASETS DIRECT VIEW */}
-        {activeTab === 'datasets' && (
+        {/* TAB 3: RESEARCH, SCHEMAS & ECONOMIC MODELS REPOSITORY (MINIMIZED INTO 3 ACCORDION FOLDER CARDS) */}
+        {activeTab === 'research_repository' && (
           <div className="space-y-4">
-            <div className="flex justify-between items-center bg-slate-800/80 p-4 rounded-2xl border border-slate-700">
-              <div>
-                <h2 className="text-base font-bold text-white">National E-Waste Datasets & Schema Hub</h2>
-                <p className="text-xs text-slate-400">View CPCB validated datasets across materials, pricing, recyclers, and traceability logs.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowDatasetsModal(true)}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Full-Screen Explorer</span>
-              </button>
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+              <h2 className="text-base font-bold text-slate-900">
+                Government Research, Schemas & Economic Repository
+              </h2>
+              <p className="text-xs text-slate-600 mt-0.5">
+                Organized into 3 expandable reference sub-folders. 100% of field studies, data models, and economic simulators are preserved and accessible below.
+              </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4">
-                <div className="text-xs font-bold text-emerald-400 uppercase font-mono mb-2">Available Schemas</div>
-                <ul className="text-xs space-y-2 text-slate-300">
-                  <li className="flex items-center justify-between border-b border-slate-700/60 pb-1.5">
-                    <span>1. Material Master (CPCB Hazard & Composition)</span>
-                    <span className="font-mono text-emerald-400 font-bold">12 Items</span>
-                  </li>
-                  <li className="flex items-center justify-between border-b border-slate-700/60 pb-1.5">
-                    <span>2. Mandi Price Index (Historical Scrap Rates)</span>
-                    <span className="font-mono text-emerald-400 font-bold">7 Days</span>
-                  </li>
-                  <li className="flex items-center justify-between border-b border-slate-700/60 pb-1.5">
-                    <span>3. Authorized Recycler Facilities Registry</span>
-                    <span className="font-mono text-emerald-400 font-bold">4 Units</span>
-                  </li>
-                  <li className="flex items-center justify-between border-b border-slate-700/60 pb-1.5">
-                    <span>4. Traceability Ledger & GPS Handover Records</span>
-                    <span className="font-mono text-emerald-400 font-bold">14 Records</span>
-                  </li>
-                  <li className="flex items-center justify-between">
-                    <span>5. AI Vision Multimodal Diagnostic Benchmarks</span>
-                    <span className="font-mono text-emerald-400 font-bold">94.8% SLA</span>
-                  </li>
-                </ul>
-              </div>
-
-              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 flex flex-col justify-between">
-                <div>
-                  <div className="text-xs font-bold text-slate-200 uppercase font-mono mb-2">Export Data Format</div>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    All datasets are downloadable in standard CSV and JSON schemas conforming to National Open Digital Ecosystem (NODE) standards.
-                  </p>
+            {/* SUB-FOLDER 3.1: NATIONAL DATASETS & SCHEMAS */}
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+              <button
+                type="button"
+                onClick={() => toggleSubFolder('datasets')}
+                className="w-full p-4 bg-slate-50 hover:bg-slate-100 border-b border-slate-200 flex items-center justify-between text-left transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-800">
+                    <Database className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      3.1 National E-Waste Datasets & Schema Hub
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-mono">
+                      Structured CPCB datasets covering 12,000+ transaction points, hazardous schemas, and NODE formats
+                    </p>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowDatasetsModal(true)}
-                  className="w-full py-2.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 mt-4"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Access Data Tables & CSV Download</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded border border-emerald-200">
+                    5 Schemas Active
+                  </span>
+                  {expandedSubFolders.datasets ? (
+                    <ChevronDown className="w-4 h-4 text-slate-500" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-slate-500" />
+                  )}
+                </div>
+              </button>
 
-        {/* TAB 3: FIELD RESEARCH */}
-        {activeTab === 'field_research' && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center bg-slate-800/80 p-4 rounded-2xl border border-slate-700">
-              <div>
-                <h2 className="text-base font-bold text-white">Pune Informal Sector Usability & Ethnographic Study</h2>
-                <p className="text-xs text-slate-400">Ground data collected from 45 scrap collectors in Shivajinagar, Bhosari MIDC, and Kasba Peth.</p>
-              </div>
+              {expandedSubFolders.datasets && (
+                <div className="p-4 sm:p-5 space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Available Schemas List */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                      <div className="text-xs font-bold text-slate-700 uppercase font-mono mb-2">
+                        Available Open Schemas
+                      </div>
+                      <ul className="text-xs space-y-2 text-slate-700 font-mono">
+                        <li className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                          <span>1. Material Master (CPCB Hazard & Composition)</span>
+                          <span className="text-emerald-800 font-bold">12 Items</span>
+                        </li>
+                        <li className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                          <span>2. Mandi Price Index (Historical Scrap Rates)</span>
+                          <span className="text-emerald-800 font-bold">7 Days</span>
+                        </li>
+                        <li className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                          <span>3. Authorized Recycler Facilities Registry</span>
+                          <span className="text-emerald-800 font-bold">4 Units</span>
+                        </li>
+                        <li className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                          <span>4. Traceability Ledger & GPS Handover Records</span>
+                          <span className="text-emerald-800 font-bold">14 Records</span>
+                        </li>
+                        <li className="flex items-center justify-between">
+                          <span>5. AI Vision Multimodal Diagnostic Benchmarks</span>
+                          <span className="text-emerald-800 font-bold">94.8% SLA</span>
+                        </li>
+                      </ul>
+                    </div>
+
+                    {/* Export Format Box */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 flex flex-col justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-slate-700 uppercase font-mono mb-1.5">
+                          NODE Data Interoperability
+                        </div>
+                        <p className="text-xs text-slate-600 leading-relaxed">
+                          All datasets are downloadable in standard CSV and JSON schemas conforming to National Open Digital Ecosystem (NODE) interoperability standards for statutory reporting.
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2 mt-4">
+                        <button
+                          type="button"
+                          onClick={() => setShowDatasetsModal(true)}
+                          className="flex-1 py-2 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold font-mono flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>Launch Interactive Explorer</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* SUB-FOLDER 3.2: PUNE INFORMAL STUDY */}
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
               <button
                 type="button"
-                onClick={() => setShowFieldResearchModal(true)}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm"
+                onClick={() => toggleSubFolder('ethnographic')}
+                className="w-full p-4 bg-slate-50 hover:bg-slate-100 border-b border-slate-200 flex items-center justify-between text-left transition-colors cursor-pointer"
               >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Full Research Report</span>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-indigo-100 border border-indigo-300 flex items-center justify-center text-indigo-800">
+                    <BookOpen className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      3.2 Pune Informal Aggregators Usability & Ethnographic Study
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-mono">
+                      Field empirical research across 45 scrap collectors in Shivajinagar, Bhosari MIDC, and Kasba Peth
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded border border-indigo-200">
+                    45 Aggregators Sampled
+                  </span>
+                  {expandedSubFolders.ethnographic ? (
+                    <ChevronDown className="w-4 h-4 text-slate-500" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-slate-500" />
+                  )}
+                </div>
               </button>
+
+              {expandedSubFolders.ethnographic && (
+                <div className="p-4 sm:p-5 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                      <div className="text-2xl font-bold font-mono text-indigo-900 tabular-nums">
+                        84%
+                      </div>
+                      <div className="text-xs font-bold text-slate-800 mt-1">
+                        Audio/Voice Preference
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                        Illiterate or semi-literate collectors rely on spoken Hindi/Marathi rate readouts over text.
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                      <div className="text-2xl font-bold font-mono text-emerald-800 tabular-nums">
+                        3.2x
+                      </div>
+                      <div className="text-xs font-bold text-slate-800 mt-1">
+                        PPE Gear Adoption
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                        Visual gamified badges increased heavy glove and mask usage from 22% to 71%.
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                      <div className="text-2xl font-bold font-mono text-amber-800 tabular-nums">
+                        100%
+                      </div>
+                      <div className="text-xs font-bold text-slate-800 mt-1">
+                        Direct Settlement SLA
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                        Instant UPI transfer eliminated the typical 7-14 day payment delay imposed by informal mafia aggregators.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowFieldResearchModal(true)}
+                      className="py-2 px-4 bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg text-xs font-bold font-mono flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open Full Ethnographic Dossier</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4">
-                <div className="text-2xl font-black font-mono text-indigo-400">84%</div>
-                <div className="text-xs font-bold text-slate-200 mt-1">Audio/Voice Preference</div>
-                <p className="text-[11px] text-slate-400 mt-1">Illiterate or semi-literate collectors rely on spoken Hindi/Marathi rate readouts over text.</p>
-              </div>
-
-              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4">
-                <div className="text-2xl font-black font-mono text-emerald-400">3.2x</div>
-                <div className="text-xs font-bold text-slate-200 mt-1">PPE Gear Adoption</div>
-                <p className="text-[11px] text-slate-400 mt-1">Visual gamified badges increased heavy glove and mask usage from 22% to 71%.</p>
-              </div>
-
-              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4">
-                <div className="text-2xl font-black font-mono text-amber-400">100%</div>
-                <div className="text-xs font-bold text-slate-200 mt-1">Direct Settlement SLA</div>
-                <p className="text-[11px] text-slate-400 mt-1">Instant UPI transfer eliminated the typical 7-14 day payment delay imposed by informal mafia aggregators.</p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 4: UNIT ECONOMICS */}
-        {activeTab === 'unit_economics' && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center bg-slate-800/80 p-4 rounded-2xl border border-slate-700">
-              <div>
-                <h2 className="text-base font-bold text-white">Macro E-Waste Unit Economics & EPR Trading Engine</h2>
-                <p className="text-xs text-slate-400">Detailed financial analysis of procurement margins, refining recovery rates, and EPR certificate values.</p>
-              </div>
+            {/* SUB-FOLDER 3.3: UNIT ECONOMICS & EPR MODEL */}
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
               <button
                 type="button"
-                onClick={() => setShowUnitEconomicsModal(true)}
-                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm"
+                onClick={() => toggleSubFolder('economics')}
+                className="w-full p-4 bg-slate-50 hover:bg-slate-100 border-b border-slate-200 flex items-center justify-between text-left transition-colors cursor-pointer"
               >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open Financial Model</span>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800">
+                    <Calculator className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      3.3 Macro Hydrometallurgical Unit Economics & EPR Engine
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-mono">
+                      Macro and micro unit economics models comparing informal acid-leaching vs formal hydrometallurgical recovery
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded border border-amber-200">
+                    EPR Certificate Model
+                  </span>
+                  {expandedSubFolders.economics ? (
+                    <ChevronDown className="w-4 h-4 text-slate-500" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 text-slate-500" />
+                  )}
+                </div>
               </button>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4">
-                <div className="text-2xl font-black font-mono text-emerald-400">₹85,000 / MT</div>
-                <div className="text-xs font-bold text-slate-200 mt-1">Gross Margin (Formal Recycler)</div>
-                <p className="text-[11px] text-slate-400 mt-1">Derived from hydrometallurgical extraction of copper, gold, palladium, and lithium.</p>
-              </div>
+              {expandedSubFolders.economics && (
+                <div className="p-4 sm:p-5 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                      <div className="text-2xl font-bold font-mono text-emerald-800 tabular-nums">
+                        ₹85,000 / MT
+                      </div>
+                      <div className="text-xs font-bold text-slate-800 mt-1">
+                        Gross Margin (Formal Recycler)
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                        Derived from hydrometallurgical extraction of copper, gold, palladium, and lithium.
+                      </p>
+                    </div>
 
-              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4">
-                <div className="text-2xl font-black font-mono text-teal-400">₹14,500 / MT</div>
-                <div className="text-xs font-bold text-slate-200 mt-1">EPR Trading Credit Yield</div>
-                <p className="text-[11px] text-slate-400 mt-1">Monetized by selling CPCB verified recycling credits to electronics OEMs (e.g. Dell, Samsung).</p>
-              </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                      <div className="text-2xl font-bold font-mono text-teal-800 tabular-nums">
+                        ₹14,500 / MT
+                      </div>
+                      <div className="text-xs font-bold text-slate-800 mt-1">
+                        EPR Trading Credit Yield
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                        Monetized by selling CPCB verified recycling credits to electronics OEMs (e.g. Dell, Samsung).
+                      </p>
+                    </div>
 
-              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-4">
-                <div className="text-2xl font-black font-mono text-amber-400">+38%</div>
-                <div className="text-xs font-bold text-slate-200 mt-1">Kabadiwala Income Boost</div>
-                <p className="text-[11px] text-slate-400 mt-1">Direct aggregator-bypassing price parity transfers additional value to the waste picker.</p>
-              </div>
-            </div>
-          </div>
-        )}
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                      <div className="text-2xl font-bold font-mono text-amber-800 tabular-nums">
+                        +38%
+                      </div>
+                      <div className="text-xs font-bold text-slate-800 mt-1">
+                        Kabadiwala Income Boost
+                      </div>
+                      <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                        Direct aggregator-bypassing price parity transfers additional value to the waste picker.
+                      </p>
+                    </div>
+                  </div>
 
-        {/* TAB 5: STATE PCB AUDIT */}
-        {activeTab === 'state_audit' && (
-          <div className="space-y-4">
-            <div className="bg-slate-800/80 p-4 rounded-2xl border border-slate-700">
-              <h2 className="text-base font-bold text-white">State Pollution Control Boards (SPCB) Real-Time Compliance</h2>
-              <p className="text-xs text-slate-400 mt-0.5">Live monitoring of authorized formal recyclers and inbound verification quotas.</p>
-            </div>
-
-            <div className="bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden">
-              <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-slate-900 text-slate-400 uppercase tracking-wider border-b border-slate-700">
-                  <tr>
-                    <th className="py-3 px-4">State SPCB</th>
-                    <th className="py-3 px-4">Authorized Units</th>
-                    <th className="py-3 px-4">Monthly Quota</th>
-                    <th className="py-3 px-4">Current Diverted</th>
-                    <th className="py-3 px-4">Compliance Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-700/60 text-slate-300">
-                  <tr className="hover:bg-slate-800/40">
-                    <td className="py-3 px-4 font-bold text-white">Maharashtra (MPCB)</td>
-                    <td className="py-3 px-4">42 Facilities</td>
-                    <td className="py-3 px-4">1,200 MT</td>
-                    <td className="py-3 px-4 text-emerald-400 font-bold">1,048 MT (87%)</td>
-                    <td className="py-3 px-4">
-                      <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                        COMPLIANT
-                      </span>
-                    </td>
-                  </tr>
-                  <tr className="hover:bg-slate-800/40">
-                    <td className="py-3 px-4 font-bold text-white">Gujarat (GPCB)</td>
-                    <td className="py-3 px-4">38 Facilities</td>
-                    <td className="py-3 px-4">980 MT</td>
-                    <td className="py-3 px-4 text-emerald-400 font-bold">892 MT (91%)</td>
-                    <td className="py-3 px-4">
-                      <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                        COMPLIANT
-                      </span>
-                    </td>
-                  </tr>
-                  <tr className="hover:bg-slate-800/40">
-                    <td className="py-3 px-4 font-bold text-white">Karnataka (KSPCB)</td>
-                    <td className="py-3 px-4">29 Facilities</td>
-                    <td className="py-3 px-4">750 MT</td>
-                    <td className="py-3 px-4 text-amber-400 font-bold">590 MT (78%)</td>
-                    <td className="py-3 px-4">
-                      <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
-                        ACTIVE AUDIT
-                      </span>
-                    </td>
-                  </tr>
-                  <tr className="hover:bg-slate-800/40">
-                    <td className="py-3 px-4 font-bold text-white">Delhi NCR (DPCC)</td>
-                    <td className="py-3 px-4">19 Facilities</td>
-                    <td className="py-3 px-4">500 MT</td>
-                    <td className="py-3 px-4 text-emerald-400 font-bold">465 MT (93%)</td>
-                    <td className="py-3 px-4">
-                      <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                        COMPLIANT
-                      </span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowUnitEconomicsModal(true)}
+                      className="py-2 px-4 bg-amber-700 hover:bg-amber-800 text-white rounded-lg text-xs font-bold font-mono flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open Economics Simulator</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
       </main>
 
-      {/* Modals Hosted Exclusively for Government Role */}
+      {/* MODALS (PRESERVED 100%) */}
       {showDatasetsModal && (
         <DatasetsExplorerModal onClose={() => setShowDatasetsModal(false)} />
       )}

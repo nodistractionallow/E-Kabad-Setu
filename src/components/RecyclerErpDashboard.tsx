@@ -492,6 +492,31 @@ export const RecyclerErpDashboard: React.FC = () => {
     speak(`Lot ${verifyingLot.id} verified at weighbridge. Payment released via ${selectedPaymentMode}.`);
   };
 
+  // Recycler Consignment Decline / Reject Modal State
+  const [decliningLot, setDecliningLot] = useState<EWasteLot | null>(null);
+  const [declineReason, setDeclineReason] = useState<string>('Contaminated scrap / Non-compliant material detected at facility gate');
+  const [isDeclineSubmitting, setIsDeclineSubmitting] = useState(false);
+
+  const openRecyclerDeclineModal = (lot: EWasteLot) => {
+    playFeedbackChime('warning');
+    setDecliningLot(lot);
+    setDeclineReason('Contaminated scrap / Non-compliant material detected at facility gate');
+  };
+
+  const handleConfirmDecline = async () => {
+    if (!decliningLot) return;
+    setIsDeclineSubmitting(true);
+    try {
+      await rejectLot(decliningLot.id, declineReason.trim());
+      speak(`Consignment ${decliningLot.id} declined and quarantined. Status synchronized across database.`);
+      setDecliningLot(null);
+    } catch (err) {
+      console.error('Recycler decline error:', err);
+    } finally {
+      setIsDeclineSubmitting(false);
+    }
+  };
+
   const handlePublishPrices = () => {
     Object.entries(editedPrices).forEach(([matId, newRate]) => {
       const rateNum = Number(newRate);
@@ -853,13 +878,24 @@ export const RecyclerErpDashboard: React.FC = () => {
                           </td>
 
                           <td className="py-3.5 px-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => openWeighbridgeModal(lot)}
-                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-transform active:scale-95 shadow-xs whitespace-nowrap"
-                            >
-                              Verify & Pay
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => openWeighbridgeModal(lot)}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-transform active:scale-95 shadow-xs whitespace-nowrap cursor-pointer text-xs"
+                              >
+                                Verify & Pay
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openRecyclerDeclineModal(lot)}
+                                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold rounded-xl transition-colors cursor-pointer text-xs flex items-center gap-1"
+                                title="Decline / Reject Consignment"
+                              >
+                                <Ban className="w-3.5 h-3.5 text-rose-600" />
+                                <span>Decline</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -2782,6 +2818,122 @@ export const RecyclerErpDashboard: React.FC = () => {
               >
                 <Check className="w-4 h-4" />
                 <span>Register Partner</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: RECYCLER CONSIGNMENT DECLINE / QUARANTINE MODAL */}
+      {decliningLot && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-rose-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center font-bold">
+                  <ShieldAlert className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">Decline & Quarantine Consignment</h3>
+                  <p className="text-[11px] text-slate-500 font-mono">Facility Gate Rejection • Multi-DB Sync</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDecliningLot(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Consignment Brief */}
+            <div className="bg-rose-50/50 border border-rose-200/80 rounded-2xl p-4 text-xs font-sans space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[11px] font-bold text-slate-500">Lot Identifier</span>
+                <span className="font-mono font-black text-slate-900 bg-white px-2 py-0.5 rounded-lg border border-slate-200">
+                  {decliningLot.id}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-600">Material & Category:</span>
+                <span className="font-bold text-slate-900">{decliningLot.materialName} ({decliningLot.category})</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-600">Declared Mass & Amount:</span>
+                <span className="font-bold text-slate-900">{decliningLot.weightKg} kg • ₹{decliningLot.totalAmount}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-600">Vendor / Collector:</span>
+                <span className="font-semibold text-slate-800">{decliningLot.collectorName} ({decliningLot.collectorId})</span>
+              </div>
+            </div>
+
+            {/* Reason Selection */}
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                Statutory Grounds for Rejection / Decline *
+              </label>
+              <div className="space-y-1.5 mb-2.5">
+                {[
+                  'Contaminated scrap / Non-compliant material detected at facility gate',
+                  'Open burning soot or toxic chemical residue detected',
+                  'Declared material mismatch / non-electronic scrap',
+                  'Gross weighbridge mass discrepancy exceeds statutory tolerance',
+                  'Hazardous / leaking battery / cracked CRT glass'
+                ].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setDeclineReason(preset)}
+                    className={`w-full text-left text-xs px-3 py-2 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                      declineReason === preset
+                        ? 'bg-rose-50 border-rose-400 font-bold text-rose-900 shadow-2xs'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>{preset}</span>
+                    {declineReason === preset && <Check className="w-3.5 h-3.5 text-rose-600 flex-shrink-0 ml-1.5" />}
+                  </button>
+                ))}
+              </div>
+
+              <label className="text-[11px] font-bold text-slate-600 block mb-1">
+                Custom Regulatory Reason / Notes (Optional)
+              </label>
+              <textarea
+                rows={2}
+                value={declineReason}
+                onChange={(e) => setDeclineReason(e.target.value)}
+                placeholder="Enter specific regulatory grounds or observation..."
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none focus:border-rose-600 focus:ring-1 focus:ring-rose-600 resize-none"
+              />
+            </div>
+
+            <div className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-start gap-2">
+              <Info className="w-4 h-4 text-slate-500 flex-shrink-0 mt-0.5" />
+              <span>
+                Declining this consignment will immediately update its status to <strong className="text-rose-700">rejected</strong> across SQLite, Cloud Firestore, and the collector's dashboard, transferring it directly to the Quarantined Hazmat Bay.
+              </span>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isDeclineSubmitting}
+                onClick={() => setDecliningLot(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeclineSubmitting || !declineReason.trim()}
+                onClick={handleConfirmDecline}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>{isDeclineSubmitting ? 'Syncing DB...' : 'Confirm Consignment Rejection'}</span>
               </button>
             </div>
           </div>

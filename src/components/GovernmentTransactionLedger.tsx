@@ -3,6 +3,7 @@ import {
   Folder,
   FolderOpen,
   ChevronRight,
+  ChevronLeft,
   Search,
   Filter,
   Download,
@@ -20,20 +21,19 @@ import {
   ExternalLink,
   Eye,
   RefreshCw,
-  QrCode,
   MapPin,
   FileSpreadsheet,
   Award,
-  ChevronLeft,
-  ChevronDown,
-  ChevronUp,
   Trash2,
   Lock,
   Key,
   SlidersHorizontal,
   X,
   RotateCcw,
-  Archive
+  Archive,
+  Phone,
+  Globe,
+  Radio
 } from 'lucide-react';
 import { RegulatoryAuthority, RecyclerFacility, TransactionRecord, EWasteLot, RecycledRecord } from '../types';
 import {
@@ -42,29 +42,44 @@ import {
   NATIONAL_TRANSACTIONS_LOG
 } from '../data/authoritiesAndTransactionsData';
 import { LotPriceHistoryModal } from './LotPriceHistoryModal';
-import { parseDateTimeToMs, getSearchableDateString } from '../utils/dateTime';
 import { useApp } from '../context/AppContext';
 
 interface GovernmentTransactionLedgerProps {
   lots?: EWasteLot[];
 }
 
-type ExplorerMode = 'authorities' | 'vendors' | 'collectors' | 'all_transactions' | 'recycle_bin';
-
 export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerProps> = ({ lots = [] }) => {
   const { deleteLotWithKey, restoreLot } = useApp();
 
-  // Navigation & Folder State
-  const [explorerMode, setExplorerMode] = useState<ExplorerMode>('authorities');
+  // 4-Tier Hierarchy Navigation State
+  const [selectedState, setSelectedState] = useState<string | null>(null);
   const [selectedAuthorityId, setSelectedAuthorityId] = useState<string | null>(null);
   const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
   const [selectedCollectorId, setSelectedCollectorId] = useState<string | null>(null);
 
-  // Table display inside dropdown toggle (user requested: hide tables inside dropdown for government folders)
-  const [isTableDropdownOpen, setIsTableDropdownOpen] = useState(true);
-  const [selectedFolderTable, setSelectedFolderTable] = useState<'transactions' | 'authorities' | 'vendors' | 'collectors'>('transactions');
+  // Search & Nationwide Mode
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isNationwideSearch, setIsNationwideSearch] = useState(false);
+  const [activeSubTab, setActiveSubTab] = useState<'dossier' | 'recycle_bin'>('dossier');
 
-  // Deletion with key 12345678 state
+  // Filters & Sorting
+  const [statusFilter, setStatusFilter] = useState<'all' | 'settled' | 'processing' | 'flagged' | 'rejected'>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [paymentModeFilter, setPaymentModeFilter] = useState<'all' | 'UPI' | 'CASH' | 'ESCROW' | 'NEFT'>('all');
+  const [sortBy, setSortBy] = useState<'date' | 'amount' | 'weight'>('date');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+
+  // Modals & Drawers
+  const [selectedLotForModal, setSelectedLotForModal] = useState<{
+    lotName: string;
+    materialId?: string;
+    currentRate?: number;
+    lotId?: string;
+  } | null>(null);
+
+  const [inspectingTxn, setInspectingTxn] = useState<TransactionRecord | null>(null);
+
+  // Statutory 12-Day Retention Safe Custody Bin
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
     try {
       const stored = localStorage.getItem('ekabad_deleted_gov_txns');
@@ -74,7 +89,6 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
     }
   });
 
-  // Statutory 12-Day Retention Safe-Deposit / Recycle Bin State
   const [recycleBin, setRecycleBin] = useState<RecycledRecord[]>(() => {
     try {
       const stored = localStorage.getItem('ekabad_govt_recycle_bin_v1');
@@ -92,26 +106,9 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
   const [securityKeyInput, setSecurityKeyInput] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
+  const [statusNotification, setStatusNotification] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
 
-  // Filters & Search
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'settled' | 'processing' | 'flagged' | 'rejected'>('all');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [sortBy, setSortBy] = useState<'date' | 'amount' | 'weight'>('date');
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
-
-  // Lot Price Graph Modal State
-  const [selectedLotForModal, setSelectedLotForModal] = useState<{
-    lotName: string;
-    materialId?: string;
-    currentRate?: number;
-    lotId?: string;
-  } | null>(null);
-
-  // Transaction Inspection Drawer / Modal
-  const [inspectingTxn, setInspectingTxn] = useState<TransactionRecord | null>(null);
-
-  // Helper to calculate countdown for mandatory 12-day retention
+  // Helper to calculate countdown for 12-day retention
   const getRetentionRemaining = (expiresAt: number) => {
     const remainingMs = expiresAt - Date.now();
     if (remainingMs <= 0) {
@@ -127,52 +124,60 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
     };
   };
 
-  // Restore a record from the 12-day recycle bin back to active status
+  // Restore a record from the 12-day recycle bin back to active records
   const handleRestoreRecord = async (item: RecycledRecord) => {
     try {
-      // 1. Restore lot in AppContext if applicable
       if (item.originalLotData) {
         await restoreLot(item.originalLotData);
       } else if (item.lotId) {
         const tx = item.transactionData;
         const reconstructedLot: EWasteLot = {
           id: item.lotId,
-          category: tx.category || 'e-waste',
+          collectorId: tx.collectorId || 'COL-MH-PN-104',
+          collectorName: tx.collectorName || 'Santosh Yadav',
+          collectorPhone: tx.collectorPhone || '+91 98231 44920',
+          materialId: tx.materialId || 'mat_pcb_high',
           materialName: tx.materialName,
+          category: tx.category || 'pcb',
           weightKg: tx.weighbridgeWeightKg || tx.declaredWeightKg || 5,
           ratePerKg: tx.ratePerKg,
+          totalAmount: tx.totalAmount || 0,
           status: tx.paymentStatus === 'settled' ? 'verified' : 'pending',
-          timestamp: tx.timestamp || tx.date,
-          collectorName: tx.collectorName,
-          collectorPhone: tx.collectorPhone,
-          totalAmount: tx.totalAmount,
-          paymentMode: tx.paymentMode,
+          paymentMode: (tx.paymentMode as any) || 'UPI',
+          timestamp: tx.timestamp || tx.date || new Date().toISOString(),
+          gpsLocation: tx.gpsCoordinates || '18.5204° N, 73.8567° E',
+          facilityId: tx.facilityId || tx.vendorId || 'REC-MH-PN-004',
+          facilityName: tx.facilityName || tx.vendorName || 'EcoMetals CPCB Dismantling Unit #4',
+          distanceKm: 3.8,
+          hazardFlag: false,
+          photoUrl: tx.photoUrl || '',
           settlementUtr: tx.settlementUtr
         };
         await restoreLot(reconstructedLot);
       }
 
-      // 2. Remove from deletedIds set
       const newDeleted = new Set(deletedIds);
       newDeleted.delete(item.transactionData.id);
       if (item.lotId) newDeleted.delete(item.lotId);
       setDeletedIds(newDeleted);
 
-      // 3. Remove from recycleBin state
       const updatedBin = recycleBin.filter((r) => r.id !== item.id);
       setRecycleBin(updatedBin);
 
-      // 4. Save to localStorage
       localStorage.setItem('ekabad_deleted_gov_txns', JSON.stringify(Array.from(newDeleted)));
       localStorage.setItem('ekabad_govt_recycle_bin_v1', JSON.stringify(updatedBin));
 
-      alert(`✅ Record ${item.transactionData.id} successfully restored to active records!`);
+      setStatusNotification({
+        message: `Record ${item.transactionData.id} successfully restored to active records!`,
+        type: 'success'
+      });
+      setTimeout(() => setStatusNotification(null), 3500);
     } catch (err) {
       console.error('Error restoring record:', err);
     }
   };
 
-  // Clear expired records or empty recycle bin with confirmation
+  // Clear or empty recycle bin
   const handleEmptyRecycleBin = () => {
     if (!window.confirm('Are you sure you want to permanently clear the Recycle Bin? Expired records will be permanently erased.')) {
       return;
@@ -185,7 +190,7 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
     }
   };
 
-  // Government Key Delete Authorization Handler (Moves to 12-Day Recycle Bin)
+  // Government Key Delete Authorization Handler
   const handleAuthorizeDelete = async () => {
     if (securityKeyInput.trim() !== '12345678') {
       setDeleteError('Invalid Security Key! Authorized Government Clearance Key "12345678" is required.');
@@ -200,7 +205,7 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
       const newDeleted = new Set(deletedIds);
       const newRecycled: RecycledRecord[] = [];
 
-      for (const tx of filteredTransactions) {
+      for (const tx of allCombinedTransactions) {
         newDeleted.add(tx.id);
         if (tx.lotId) {
           newDeleted.add(tx.lotId);
@@ -228,7 +233,7 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
       } catch (e) {
         console.warn('LocalStorage error:', e);
       }
-      setDeleteSuccess(`Successfully deleted ${filteredTransactions.length} records into 12-day Statutory Recycle Bin.`);
+      setDeleteSuccess(`Successfully moved ${newRecycled.length} records into 12-day Statutory Recycle Bin.`);
     } else if (deleteModal.txn) {
       const target = deleteModal.txn;
       const newDeleted = new Set(deletedIds);
@@ -260,7 +265,7 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
       } catch (e) {
         console.warn('LocalStorage error:', e);
       }
-      setDeleteSuccess(`Record ${target.id} deleted and placed in 12-day Statutory Recycle Bin.`);
+      setDeleteSuccess(`Record ${target.id} moved to 12-day Statutory Recycle Bin.`);
     }
 
     setSecurityKeyInput('');
@@ -271,64 +276,176 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
     }, 1200);
   };
 
-  // Merge live app lots with national transaction log
-  const allCombinedTransactions = useMemo(() => {
-    // Transform lots from app state into transaction records safely with null guards
-    const appLotsAsTxns: TransactionRecord[] = lots.map((lot) => {
-      const isLotPaid = lot.status?.toLowerCase() === 'paid' || 
-                        lot.status?.toLowerCase() === 'settled' || 
-                        Boolean(lot.paidAt) || 
-                        Boolean(lot.settlementUtr);
+  // Comprehensive regulatory authorities including all monitored regional state jurisdictions
+  const ALL_REGULATORY_AUTHORITIES: RegulatoryAuthority[] = useMemo(() => {
+    const list = [...REGULATORY_AUTHORITIES];
+    if (!list.some((a) => a.id === 'auth_ueppcb' || a.state.toLowerCase() === 'uttarakhand')) {
+      list.push({
+        id: 'auth_ueppcb',
+        code: 'UEPPCB-UTTARAKHAND',
+        name: 'Uttarakhand (UEPPCB)',
+        fullName: 'Uttarakhand Environmental Protection & Pollution Control Board',
+        state: 'Uttarakhand',
+        zone: 'North',
+        headquarters: 'Gaura Devi Paryavaran Bhawan, IT Park, Dehradun 248001',
+        nodalOfficer: 'Dr. S. P. Subudhi (Member Secretary, E-Waste)',
+        activeVendorsCount: 14,
+        activeCollectorsCount: 420,
+        totalTradedTons: 182.0,
+        totalDisbursedCrores: 0.64,
+        complianceScore: 96.2,
+        status: 'Operational'
+      });
+    }
+    return list;
+  }, []);
 
-      const effectiveDate = (isLotPaid && lot.paidAt)
-        ? (lot.paidAt.includes('T') ? lot.paidAt.split('T')[0] : lot.paidAt)
-        : (lot.createdAt 
-            ? (lot.createdAt.includes('T') ? lot.createdAt.split('T')[0] : lot.createdAt)
-            : (lot.timestamp ? (lot.timestamp.includes('T') ? lot.timestamp.split('T')[0] : (lot.timestamp.includes('/') ? lot.timestamp.split(' ')[0] : lot.timestamp)) : new Date().toISOString().split('T')[0]));
+  // Merge live app lots with national transaction log without duplication
+  const allCombinedTransactions: TransactionRecord[] = useMemo(() => {
+    // Map of national transaction records by lotId and id
+    const nationalTxnByLotId = new Map<string, TransactionRecord>();
+    NATIONAL_TRANSACTIONS_LOG.forEach((tx) => {
+      if (tx.lotId) nationalTxnByLotId.set(tx.lotId, tx);
+      nationalTxnByLotId.set(tx.id, tx);
+    });
 
-      const effectiveTimestamp = (isLotPaid && lot.paidAt) 
-        ? lot.paidAt 
-        : (lot.paidTimestamp ? new Date(lot.paidTimestamp).toISOString() : (lot.createdAt || lot.timestamp || new Date().toISOString()));
+    // Supplemental record for Telangana Cerebra facility to ensure active demonstration
+    const supplementalTxns: TransactionRecord[] = [
+      {
+        id: 'TXN-CPCB-2026-8807',
+        lotId: 'LOT-2026-EW-8807',
+        settlementUtr: 'UPI/MANDI/CRBR/449102837190/SETTLE',
+        date: '2026-09-03',
+        timestamp: '2026-09-03 04:15 PM',
+        vendorId: 'REC-TS-HYD-021',
+        vendorName: 'Cerebra Integrated E-Waste Solutions',
+        vendorCpcbId: 'CPCB/EW-REC/2026/9041',
+        authorityId: 'auth_tspcb',
+        statePcb: 'TSPCB-HYD-EW-621',
+        collectorId: 'KBD-TS-7701',
+        collectorName: 'के. वेंकट राव (K. Venkat Rao)',
+        collectorPhone: '+91 94401 55210',
+        collectorWard: 'Cherlapally IDA, Hyderabad',
+        collectorTier: 'Gold',
+        materialId: 'mat_pcb_high',
+        materialName: 'High-Grade Server & Telecom Motherboard',
+        category: 'pcb',
+        declaredWeightKg: 45.0,
+        weighbridgeWeightKg: 45.0,
+        ratePerKg: 490,
+        totalAmount: 22050,
+        paymentMode: 'UPI',
+        paymentStatus: 'settled',
+        eprCreditGeneratedKg: 45.0,
+        eprCertificateNo: 'EPR-CPCB-2026-TS-90124',
+        gpsCoordinates: '17.4483° N, 78.5983° E',
+        photoUrl: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=400&auto=format&fit=crop&q=80'
+      }
+    ];
 
-      const rate = lot.ratePerKg || (lot as any).pricePerKg || 480;
-      const weight = lot.weighbridgeWeightKg || lot.weightKg || 5.0;
-      const amount = lot.finalPayoutAmount || lot.totalAmount || (weight * rate);
+    supplementalTxns.forEach((st) => {
+      if (!nationalTxnByLotId.has(st.id) && !nationalTxnByLotId.has(st.lotId)) {
+        nationalTxnByLotId.set(st.lotId, st);
+        nationalTxnByLotId.set(st.id, st);
+      }
+    });
 
-      return {
-        id: lot.id,
+    const processedLotIds = new Set<string>();
+    const mergedList: TransactionRecord[] = [];
+
+    // 1. Reconcile lots from dynamic application state (AppContext)
+    lots.forEach((lot) => {
+      processedLotIds.add(lot.id);
+      const existingNatTx = nationalTxnByLotId.get(lot.id);
+
+      const isLotPaid =
+        lot.status?.toLowerCase() === 'paid' ||
+        lot.status?.toLowerCase() === 'settled' ||
+        Boolean(lot.paidAt) ||
+        Boolean(lot.settlementUtr);
+
+      const effectiveDate =
+        isLotPaid && lot.paidAt
+          ? lot.paidAt.includes('T')
+            ? lot.paidAt.split('T')[0]
+            : lot.paidAt
+          : lot.timestamp
+          ? lot.timestamp.includes('T')
+            ? lot.timestamp.split('T')[0]
+            : lot.timestamp.split(' ')[0]
+          : new Date().toISOString().split('T')[0];
+
+      const effectiveTimestamp =
+        isLotPaid && lot.paidAt
+          ? lot.paidAt
+          : lot.paidTimestamp
+          ? new Date(lot.paidTimestamp).toISOString()
+          : lot.timestamp || new Date().toISOString();
+
+      const rate = lot.ratePerKg || (existingNatTx?.ratePerKg ?? 480);
+      const weight = lot.weighbridgeWeightKg || lot.weightKg || (existingNatTx?.weighbridgeWeightKg ?? 5.0);
+      const amount = lot.finalPayoutAmount || lot.totalAmount || (existingNatTx?.totalAmount ?? weight * rate);
+
+      mergedList.push({
+        id: existingNatTx?.id || `TXN-CPCB-2026-${lot.id.slice(-4)}`,
         lotId: lot.id,
         date: effectiveDate,
         timestamp: effectiveTimestamp,
-        vendorId: lot.facilityId || (lot as any).recyclerId || 'fac_mumbai_01',
-        vendorName: lot.facilityName || (lot as any).recyclerName || 'EcoRecycle CleanTech Hub (Turbhe)',
-        vendorCpcbId: 'CPCB-REG-2024-MH-084',
-        authorityId: 'auth_mpcb',
-        statePcb: 'MPCB (Maharashtra)',
-        collectorId: lot.collectorId || 'KBD-MH-4402',
-        collectorName: lot.collectorName || 'Ram Sevak (रामसेवक कांबळे)',
-        collectorPhone: lot.collectorPhone || '+91 98234 56789',
-        collectorWard: 'Ward 12, Pune East',
-        collectorTier: 'Gold' as const,
-        materialId: lot.materialId || lot.id,
-        materialName: lot.materialName || lot.category,
-        category: (lot.category && (lot.category.toLowerCase().includes('wire') || lot.category.toLowerCase().includes('copper'))) ? 'copper' : 'pcb',
+        vendorId: lot.facilityId || existingNatTx?.vendorId || 'REC-MH-PN-004',
+        vendorName: lot.facilityName || existingNatTx?.vendorName || 'EcoMetals CPCB Dismantling Unit #4',
+        vendorCpcbId: existingNatTx?.vendorCpcbId || 'CPCB/EW-REC/2026/8812',
+        authorityId: existingNatTx?.authorityId || 'auth_mpcb',
+        statePcb: existingNatTx?.statePcb || 'MPCB-PUNE-EW-902',
+        collectorId: lot.collectorId || existingNatTx?.collectorId || 'KBD-MH-3108',
+        collectorName: lot.collectorName || existingNatTx?.collectorName || 'संतोष यादव (Santosh Yadav)',
+        collectorPhone: lot.collectorPhone || existingNatTx?.collectorPhone || '+91 97112 34509',
+        collectorWard: existingNatTx?.collectorWard || 'Ward 8, Khadki, Pune',
+        collectorTier: (existingNatTx?.collectorTier || 'Gold') as any,
+        materialId: lot.materialId || existingNatTx?.materialId || lot.id,
+        materialName: lot.materialName || existingNatTx?.materialName || lot.category,
+        category: lot.category || existingNatTx?.category || 'pcb',
         declaredWeightKg: lot.weightKg || weight,
         weighbridgeWeightKg: weight,
         ratePerKg: rate,
         totalAmount: amount,
-        paymentMode: (lot.paymentMode as any) || 'UPI',
-        paymentStatus: isLotPaid ? 'settled' : (lot.status === 'verified' ? 'settled' : (lot.status === 'rejected' ? 'rejected' : 'processing')),
-        settlementUtr: lot.settlementUtr || `UPI-SETTLE-${lot.id.slice(-8).toUpperCase()}`,
+        paymentMode: (lot.paymentMode as any) || existingNatTx?.paymentMode || 'UPI',
+        paymentStatus: isLotPaid
+          ? 'settled'
+          : lot.status === 'verified'
+          ? 'settled'
+          : lot.status === 'rejected'
+          ? 'rejected'
+          : existingNatTx?.paymentStatus || 'processing',
+        settlementUtr:
+          lot.settlementUtr ||
+          existingNatTx?.settlementUtr ||
+          `UPI/MANDI/MH/${lot.id.slice(-8).toUpperCase()}`,
         eprCreditGeneratedKg: Math.round(weight * 0.85),
-        eprCertificateNo: (isLotPaid || lot.status === 'verified') ? `EPR-CPCB-2026-VAL-${lot.id.slice(-4)}` : undefined,
-        gpsCoordinates: lot.gpsLocation || '18.5204° N, 73.8567° E'
-      };
+        eprCertificateNo:
+          isLotPaid || lot.status === 'verified'
+            ? existingNatTx?.eprCertificateNo || `EPR-CPCB-2026-MH-${lot.id.slice(-4)}`
+            : undefined,
+        gpsCoordinates: lot.gpsLocation || existingNatTx?.gpsCoordinates || '18.5204° N, 73.8567° E',
+        anomalyFlag: lot.anomalyFlag ?? existingNatTx?.anomalyFlag ?? false,
+        anomalyReason: lot.anomalyReason ?? existingNatTx?.anomalyReason,
+        photoUrl: lot.photoUrl || existingNatTx?.photoUrl
+      });
+    });
+
+    // 2. Add national records not already present in live lots
+    const allNationalList = [...NATIONAL_TRANSACTIONS_LOG, ...supplementalTxns];
+    allNationalList.forEach((tx) => {
+      if (!processedLotIds.has(tx.lotId) && !processedLotIds.has(tx.id)) {
+        processedLotIds.add(tx.lotId);
+        processedLotIds.add(tx.id);
+        mergedList.push(tx);
+      }
     });
 
     const recycledTxnIds = new Set(recycleBin.map((r) => r.transactionData?.id).filter(Boolean));
     const recycledLotIds = new Set(recycleBin.map((r) => r.lotId).filter(Boolean) as string[]);
 
-    return [...appLotsAsTxns, ...NATIONAL_TRANSACTIONS_LOG].filter(
+    return mergedList.filter(
       (tx) =>
         !deletedIds.has(tx.id) &&
         !(tx.lotId && deletedIds.has(tx.lotId)) &&
@@ -337,233 +454,446 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
     );
   }, [lots, deletedIds, recycleBin]);
 
-  // Filtered transactions based on breadcrumb folders and query
-  const filteredTransactions = useMemo(() => {
-    return allCombinedTransactions.filter((tx) => {
-      // Authority Filter
+  // Current Active Authority and Facility objects
+  const currentAuthority = useMemo(() => {
+    if (!selectedAuthorityId && !selectedState) return null;
+    return (
+      ALL_REGULATORY_AUTHORITIES.find(
+        (a) =>
+          a.id === selectedAuthorityId ||
+          (selectedState && a.state.toLowerCase() === selectedState.toLowerCase())
+      ) || null
+    );
+  }, [selectedAuthorityId, selectedState, ALL_REGULATORY_AUTHORITIES]);
+
+  const currentVendor = useMemo(() => {
+    if (!selectedVendorId) return null;
+    const found = NATIONAL_VENDOR_FACILITIES.find((v) => v.id === selectedVendorId);
+    if (found) return found;
+    return {
+      id: selectedVendorId,
+      name: selectedVendorId,
+      cpcbId: 'CPCB/EW-REC/2026/GENERIC',
+      statePcb: 'SPCB-LIC-001',
+      location: 'Authorized Industrial Estate',
+      monthlyQuotaTons: 120.0,
+      processedThisMonthTons: 35.0,
+      activeCollectors: 10,
+      eprCreditsGeneratedTons: 30.0
+    };
+  }, [selectedVendorId]);
+
+  // Helper to determine current drilldown tier
+  const currentTier: 'states' | 'recyclers' | 'collectors' | 'transactions' = useMemo(() => {
+    if (selectedCollectorId) return 'transactions';
+    if (selectedVendorId) return 'collectors';
+    if (selectedState || selectedAuthorityId) return 'recyclers';
+    return 'states';
+  }, [selectedState, selectedAuthorityId, selectedVendorId, selectedCollectorId]);
+
+  // LEVEL 1: State Folders Data
+  const stateFolders = useMemo(() => {
+    // All regional states (excluding CPCB national HQ)
+    const states = ALL_REGULATORY_AUTHORITIES.filter((a) => a.id !== 'auth_cpcb_hq');
+
+    return states.map((auth) => {
+      // Find all transactions matching this authority/state
+      const stateTxns = allCombinedTransactions.filter(
+        (tx) =>
+          tx.authorityId === auth.id ||
+          (auth.id === 'auth_ueppcb' && (tx.authorityId === 'auth_cpcb_hq' || tx.statePcb?.includes('UEPPCB'))) ||
+          (tx.statePcb && tx.statePcb.toLowerCase().includes(auth.state.toLowerCase())) ||
+          (tx.statePcb && tx.statePcb.toLowerCase().includes(auth.code.toLowerCase().split('-')[0]))
+      );
+
+      // Find all facilities in this state
+      const stateFacilities = NATIONAL_VENDOR_FACILITIES.filter(
+        (f) =>
+          f.authorityId === auth.id ||
+          (auth.id === 'auth_ueppcb' && (f.state === 'Uttarakhand' || f.id === 'REC-UK-HW-012')) ||
+          (f.state && f.state.toLowerCase() === auth.state.toLowerCase())
+      );
+
+      // Unique collectors active
+      const uniqueCollectors = new Set(stateTxns.map((t) => t.collectorId || t.collectorName)).size;
+      const totalWeightKg = stateTxns.reduce(
+        (acc, t) => acc + (t.weighbridgeWeightKg || t.declaredWeightKg || 0),
+        0
+      );
+      const totalDisbursed = stateTxns.reduce((acc, t) => acc + (t.totalAmount || 0), 0);
+
+      return {
+        authority: auth,
+        stateName: auth.state,
+        spcbCode: auth.code,
+        facilitiesCount: Math.max(stateFacilities.length, auth.activeVendorsCount || 0),
+        transactionsCount: stateTxns.length,
+        collectorsCount: Math.max(uniqueCollectors, stateTxns.length > 0 ? uniqueCollectors : 1),
+        totalWeightMT: (totalWeightKg / 1000).toFixed(2),
+        totalDisbursed: totalDisbursed,
+        complianceScore: auth.complianceScore || 95.0,
+        status: auth.status || 'Operational'
+      };
+    });
+  }, [allCombinedTransactions, ALL_REGULATORY_AUTHORITIES]);
+
+  // LEVEL 2: Recycler Company Folders for Selected State
+  const recyclerCompanyFolders = useMemo(() => {
+    if (!selectedState && !selectedAuthorityId) return [];
+
+    const stateMatches = (fState?: string, aId?: string) => {
       if (selectedAuthorityId) {
-        // CPCB is central national authority that monitors all state feeds
-        if (selectedAuthorityId !== 'auth_cpcb') {
-          const auth = REGULATORY_AUTHORITIES.find((a) => a.id === selectedAuthorityId);
-          if (auth) {
-            const authCode = auth.code.toLowerCase();
-            const authNameFirst = auth.name.toLowerCase().split(' ')[0];
-            const matchesAuth = tx.statePcb.toLowerCase().includes(authCode) || 
-                                tx.statePcb.toLowerCase().includes(authNameFirst) ||
-                                tx.authorityId === selectedAuthorityId;
-            if (!matchesAuth) return false;
-          }
+        if (aId === selectedAuthorityId) return true;
+        if (selectedAuthorityId === 'auth_ueppcb' && (aId === 'auth_cpcb_hq' || fState === 'Uttarakhand')) return true;
+      }
+      if (selectedState && fState && fState.toLowerCase() === selectedState.toLowerCase()) return true;
+      return false;
+    };
+
+    const facilities = NATIONAL_VENDOR_FACILITIES.filter((f) => stateMatches(f.state, f.authorityId));
+
+    return facilities.map((fac) => {
+      const facTxns = allCombinedTransactions.filter(
+        (t) => t.vendorId === fac.id || t.vendorName?.toLowerCase() === fac.name.toLowerCase()
+      );
+      const uniqueCollectors = new Set(facTxns.map((t) => t.collectorId || t.collectorName)).size;
+      const totalWeightKg = facTxns.reduce(
+        (acc, t) => acc + (t.weighbridgeWeightKg || t.declaredWeightKg || 0),
+        0
+      );
+      const totalDisbursed = facTxns.reduce((acc, t) => acc + (t.totalAmount || 0), 0);
+
+      return {
+        facility: fac,
+        transactionsCount: facTxns.length,
+        collectorsCount: Math.max(uniqueCollectors, facTxns.length > 0 ? uniqueCollectors : 1),
+        totalWeightKg,
+        totalDisbursed,
+        quotaUsagePct: Math.min(
+          100,
+          Math.round((fac.processedThisMonthTons / (fac.monthlyQuotaTons || 1)) * 100)
+        )
+      };
+    });
+  }, [selectedState, selectedAuthorityId, allCombinedTransactions]);
+
+  // LEVEL 3: Scrap Collector Folders for Selected Recycler
+  const scrapCollectorFolders = useMemo(() => {
+    if (!selectedVendorId) return [];
+
+    const facTxns = allCombinedTransactions.filter(
+      (t) =>
+        t.vendorId === selectedVendorId ||
+        (currentVendor && t.vendorName?.toLowerCase() === currentVendor.name.toLowerCase())
+    );
+
+    const collectorMap = new Map<
+      string,
+      {
+        collectorId: string;
+        collectorName: string;
+        collectorPhone: string;
+        collectorWard: string;
+        collectorTier: string;
+        txnCount: number;
+        totalWeightKg: number;
+        totalEarnings: number;
+        lastActiveDate: string;
+      }
+    >();
+
+    facTxns.forEach((tx) => {
+      const cId = tx.collectorId || tx.collectorName || 'COL-UNKNOWN';
+      const existing = collectorMap.get(cId);
+      const wt = tx.weighbridgeWeightKg || tx.declaredWeightKg || 0;
+      const amt = tx.totalAmount || 0;
+      const date = tx.date || tx.timestamp?.split('T')[0] || tx.timestamp || '2026-09-01';
+
+      if (!existing) {
+        collectorMap.set(cId, {
+          collectorId: cId,
+          collectorName: tx.collectorName || 'Authorized Collector',
+          collectorPhone: tx.collectorPhone || '+91 98000 00000',
+          collectorWard: tx.collectorWard || 'Local Ward Depot',
+          collectorTier: tx.collectorTier || 'Silver',
+          txnCount: 1,
+          totalWeightKg: wt,
+          totalEarnings: amt,
+          lastActiveDate: date
+        });
+      } else {
+        existing.txnCount += 1;
+        existing.totalWeightKg += wt;
+        existing.totalEarnings += amt;
+        if (date > existing.lastActiveDate) {
+          existing.lastActiveDate = date;
         }
       }
+    });
 
-      // Vendor Filter
-      if (selectedVendorId) {
-        if (tx.vendorId !== selectedVendorId) {
-          return false;
-        }
-      }
+    return Array.from(collectorMap.values());
+  }, [selectedVendorId, currentVendor, allCombinedTransactions]);
 
-      // Collector Filter
+  // LEVEL 4 / Global Filtered Transactions
+  const filteredTransactions = useMemo(() => {
+    let result = allCombinedTransactions;
+
+    // If NOT in global nationwide search, apply hierarchical drilldown constraints
+    if (!isNationwideSearch) {
       if (selectedCollectorId) {
-        if (tx.collectorId !== selectedCollectorId && tx.collectorName !== selectedCollectorId) {
+        result = result.filter(
+          (t) =>
+            (t.collectorId === selectedCollectorId || t.collectorName === selectedCollectorId) &&
+            (t.vendorId === selectedVendorId || (currentVendor && t.vendorName?.toLowerCase() === currentVendor.name.toLowerCase()))
+        );
+      } else if (selectedVendorId) {
+        result = result.filter(
+          (t) =>
+            t.vendorId === selectedVendorId ||
+            (currentVendor && t.vendorName?.toLowerCase() === currentVendor.name.toLowerCase())
+        );
+      } else if (selectedState || selectedAuthorityId) {
+        result = result.filter((t) => {
+          if (selectedAuthorityId && t.authorityId === selectedAuthorityId) return true;
+          if (selectedAuthorityId === 'auth_ueppcb' && (t.authorityId === 'auth_cpcb_hq' || t.statePcb?.includes('UEPPCB'))) return true;
+          if (selectedState && t.statePcb?.toLowerCase().includes(selectedState.toLowerCase())) return true;
           return false;
-        }
+        });
       }
+    }
 
-      // Status Filter
-      if (statusFilter !== 'all' && tx.paymentStatus !== statusFilter) {
-        return false;
-      }
-
-      // Category Filter
-      if (categoryFilter !== 'all') {
-        const cat = categoryFilter.toLowerCase();
-        const matchesCategory = tx.category.toLowerCase().includes(cat) || tx.materialName.toLowerCase().includes(cat);
-        if (!matchesCategory) return false;
-      }
-
-      // Search Query
-      if (searchQuery.trim() !== '') {
-        const q = searchQuery.toLowerCase();
-        const dateStr = getSearchableDateString(tx.timestamp || tx.date).toLowerCase();
-        const matches =
-          tx.id.toLowerCase().includes(q) ||
-          tx.lotId.toLowerCase().includes(q) ||
-          tx.settlementUtr.toLowerCase().includes(q) ||
-          tx.vendorName.toLowerCase().includes(q) ||
-          tx.collectorName.toLowerCase().includes(q) ||
-          (tx.collectorId && tx.collectorId.toLowerCase().includes(q)) ||
+    // Apply Search Query
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      result = result.filter((tx) => {
+        return (
+          (tx.id && tx.id.toLowerCase().includes(q)) ||
+          (tx.lotId && tx.lotId.toLowerCase().includes(q)) ||
+          (tx.settlementUtr && tx.settlementUtr.toLowerCase().includes(q)) ||
+          (tx.materialName && tx.materialName.toLowerCase().includes(q)) ||
+          (tx.collectorName && tx.collectorName.toLowerCase().includes(q)) ||
           (tx.collectorPhone && tx.collectorPhone.toLowerCase().includes(q)) ||
-          tx.materialName.toLowerCase().includes(q) ||
-          tx.statePcb.toLowerCase().includes(q) ||
-          tx.paymentStatus.toLowerCase().includes(q) ||
-          (q.includes('paid') && tx.paymentStatus === 'settled') ||
-          (q.includes('verif') && (tx.paymentStatus === 'settled' || Boolean(tx.eprCertificateNo))) ||
-          (q.includes('settl') && tx.paymentStatus === 'settled') ||
-          (tx.date && tx.date.toLowerCase().includes(q)) ||
-          dateStr.includes(q);
-        if (!matches) return false;
-      }
+          (tx.vendorName && tx.vendorName.toLowerCase().includes(q)) ||
+          (tx.statePcb && tx.statePcb.toLowerCase().includes(q))
+        );
+      });
+    }
 
-      return true;
-    }).sort((a, b) => {
-      if (sortBy === 'date') {
-        const timeA = parseDateTimeToMs(a.timestamp || a.date);
-        const timeB = parseDateTimeToMs(b.timestamp || b.date);
-        return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
-      }
+    // Apply Status Filter
+    if (statusFilter !== 'all') {
+      result = result.filter((tx) => {
+        const s = (tx.paymentStatus || tx.status || '').toLowerCase();
+        if (statusFilter === 'settled') return s === 'settled' || s === 'verified';
+        if (statusFilter === 'processing') return s === 'processing' || s === 'pending';
+        if (statusFilter === 'flagged') return s === 'flagged' || tx.anomalyFlag === true;
+        if (statusFilter === 'rejected') return s === 'rejected';
+        return true;
+      });
+    }
+
+    // Apply Material Category Filter
+    if (categoryFilter !== 'all') {
+      result = result.filter((tx) => {
+        const c = (tx.category || '').toLowerCase();
+        const m = (tx.materialName || '').toLowerCase();
+        return c.includes(categoryFilter.toLowerCase()) || m.includes(categoryFilter.toLowerCase());
+      });
+    }
+
+    // Apply Payment Mode Filter
+    if (paymentModeFilter !== 'all') {
+      result = result.filter((tx) => {
+        const pm = (tx.paymentMode || '').toUpperCase();
+        return pm === paymentModeFilter;
+      });
+    }
+
+    // Sorting
+    return [...result].sort((a, b) => {
       if (sortBy === 'amount') {
-        return sortOrder === 'desc' ? b.totalAmount - a.totalAmount : a.totalAmount - b.totalAmount;
+        const amtA = a.totalAmount || 0;
+        const amtB = b.totalAmount || 0;
+        return sortOrder === 'desc' ? amtB - amtA : amtA - amtB;
       }
       if (sortBy === 'weight') {
-        const wA = a.weighbridgeWeightKg || a.declaredWeightKg;
-        const wB = b.weighbridgeWeightKg || b.declaredWeightKg;
-        return sortOrder === 'desc' ? wB - wA : wA - wB;
+        const wtA = a.weighbridgeWeightKg || a.declaredWeightKg || 0;
+        const wtB = b.weighbridgeWeightKg || b.declaredWeightKg || 0;
+        return sortOrder === 'desc' ? wtB - wtA : wtA - wtB;
       }
-      return 0;
+      // Date sort
+      const dateA = a.timestamp || a.date || '';
+      const dateB = b.timestamp || b.date || '';
+      return sortOrder === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
     });
   }, [
     allCombinedTransactions,
-    selectedAuthorityId,
-    selectedVendorId,
+    isNationwideSearch,
     selectedCollectorId,
+    selectedVendorId,
+    selectedState,
+    selectedAuthorityId,
+    currentVendor,
+    searchQuery,
     statusFilter,
     categoryFilter,
-    searchQuery,
+    paymentModeFilter,
     sortBy,
     sortOrder
   ]);
 
-  // Aggregate Key Metrics for current filtered view
-  const summaryMetrics = useMemo(() => {
-    const totalDisbursed = filteredTransactions.reduce((acc, t) => acc + t.totalAmount, 0);
-    const totalWeightKg = filteredTransactions.reduce((acc, t) => acc + (t.weighbridgeWeightKg || t.declaredWeightKg), 0);
-    const uniqueVendors = new Set(filteredTransactions.map((t) => t.vendorId)).size;
-    const uniqueCollectors = new Set(filteredTransactions.map((t) => t.collectorName)).size;
-    const totalFlagged = filteredTransactions.filter((t) => t.paymentStatus === 'flagged' || t.anomalyFlag).length;
+  // Search filtered folders for Level 1, 2, 3
+  const searchedStateFolders = useMemo(() => {
+    if (!searchQuery.trim() || isNationwideSearch) return stateFolders;
+    const q = searchQuery.toLowerCase().trim();
+    return stateFolders.filter(
+      (s) =>
+        s.stateName.toLowerCase().includes(q) ||
+        s.spcbCode.toLowerCase().includes(q) ||
+        s.authority.name.toLowerCase().includes(q)
+    );
+  }, [stateFolders, searchQuery, isNationwideSearch]);
 
-    return {
-      totalDisbursed,
-      totalWeightKg,
-      uniqueVendors,
-      uniqueCollectors,
-      totalFlagged
-    };
-  }, [filteredTransactions]);
+  const searchedRecyclerFolders = useMemo(() => {
+    if (!searchQuery.trim() || isNationwideSearch) return recyclerCompanyFolders;
+    const q = searchQuery.toLowerCase().trim();
+    return recyclerCompanyFolders.filter(
+      (r) =>
+        r.facility.name.toLowerCase().includes(q) ||
+        r.facility.cpcbId.toLowerCase().includes(q) ||
+        (r.facility.city && r.facility.city.toLowerCase().includes(q))
+    );
+  }, [recyclerCompanyFolders, searchQuery, isNationwideSearch]);
 
-  const handleResetBreadcrumbs = () => {
-    setSelectedAuthorityId(null);
-    setSelectedVendorId(null);
-    setSelectedCollectorId(null);
-  };
+  const searchedCollectorFolders = useMemo(() => {
+    if (!searchQuery.trim() || isNationwideSearch) return scrapCollectorFolders;
+    const q = searchQuery.toLowerCase().trim();
+    return scrapCollectorFolders.filter(
+      (c) =>
+        c.collectorName.toLowerCase().includes(q) ||
+        c.collectorId.toLowerCase().includes(q) ||
+        c.collectorPhone.toLowerCase().includes(q) ||
+        c.collectorWard.toLowerCase().includes(q)
+    );
+  }, [scrapCollectorFolders, searchQuery, isNationwideSearch]);
 
-  const handleOpenPriceModal = (materialName: string, materialId?: string, rate?: number, lotId?: string) => {
-    setSelectedLotForModal({
-      lotName: materialName,
-      materialId: materialId || materialName,
-      currentRate: rate,
-      lotId: lotId
-    });
-  };
+  // Current active collector details object for header display
+  const currentCollector = useMemo(() => {
+    if (!selectedCollectorId) return null;
+    return (
+      scrapCollectorFolders.find((c) => c.collectorId === selectedCollectorId) || {
+        collectorId: selectedCollectorId,
+        collectorName: selectedCollectorId,
+        collectorPhone: '+91 98000 00000',
+        collectorWard: 'Local Depot',
+        collectorTier: 'Silver'
+      }
+    );
+  }, [selectedCollectorId, scrapCollectorFolders]);
 
+  // CSV Export
   const handleExportCsv = () => {
     const headers = [
       'Transaction ID',
       'Lot ID',
       'Date',
-      'Buyer Facility',
-      'CPCB Reg ID',
-      'SPCB Jurisdiction',
-      'Collector Name',
+      'State / SPCB',
+      'Recycler Company',
+      'Scrap Collector',
       'Collector Phone',
       'Material Name',
       'Category',
-      'Declared Wt (kg)',
-      'Weighbridge Wt (kg)',
-      'Rate (INR/kg)',
-      'Total Amount (INR)',
+      'Weight (Kg)',
+      'Rate (₹/kg)',
+      'Total Amount (₹)',
       'Payment Mode',
-      'Payment Status',
+      'Status',
       'Settlement UTR'
     ];
 
     const rows = filteredTransactions.map((tx) => [
       tx.id,
       tx.lotId,
-      tx.date,
-      `"${tx.vendorName.replace(/"/g, '""')}"`,
-      tx.vendorCpcbId,
-      tx.statePcb,
-      `"${tx.collectorName.replace(/"/g, '""')}"`,
-      tx.collectorPhone,
-      `"${tx.materialName.replace(/"/g, '""')}"`,
-      tx.category,
-      tx.declaredWeightKg,
-      tx.weighbridgeWeightKg,
+      tx.date || tx.timestamp,
+      tx.statePcb || 'Maharashtra',
+      `"${tx.vendorName || 'EcoMetals'}"`,
+      `"${tx.collectorName || 'Santosh Yadav'}"`,
+      tx.collectorPhone || '',
+      `"${tx.materialName}"`,
+      tx.category || 'pcb',
+      tx.weighbridgeWeightKg || tx.declaredWeightKg || 0,
       tx.ratePerKg,
       tx.totalAmount,
-      tx.paymentMode,
-      tx.paymentStatus,
-      tx.settlementUtr
+      tx.paymentMode || 'UPI',
+      tx.paymentStatus || 'settled',
+      tx.settlementUtr || ''
     ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `CPCB_Vendor_Collector_Ledger_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute(
+      'download',
+      `CPCB_Govt_Ledger_${new Date().toISOString().split('T')[0]}.csv`
+    );
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  const currentAuthority = selectedAuthorityId ? REGULATORY_AUTHORITIES.find((a) => a.id === selectedAuthorityId) : null;
-  const currentVendor = selectedVendorId ? NATIONAL_VENDOR_FACILITIES.find((v) => v.id === selectedVendorId) : null;
-
   return (
-    <div className="space-y-6">
-      {/* Top Banner / Breadcrumb & View Toggle Header */}
-      <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs">
+    <div className="space-y-5 text-slate-900 font-sans">
+      {/* TOP REGULATORY BANNER */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <div className="flex flex-wrap items-center gap-2 mb-1.5">
-              <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1">
+              <span className="px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1">
                 <ShieldCheck className="w-3 h-3" />
-                Ministry of Environment & Climate Change (MoEFCC)
+                CPCB National Waste Audit Surveillance
               </span>
-              <span className="px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200 text-[10px] font-mono font-bold">
-                E-Waste Rules 2022 Central Registry
+              <span className="px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-mono font-semibold">
+                E-Waste Rules 2022 • Section 4(1) Schedule III
               </span>
             </div>
             <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-              National Vendor-to-Collector Transaction Dossier & Authority Folders
+              State-to-Collector Hierarchical Transaction Ledger
             </h1>
             <p className="text-xs text-slate-600 mt-1 max-w-3xl leading-relaxed">
-              Real-time surveillance of scrap transactions from registered kabadiwalas to authorized recycling plants.
-              Categorized by State Pollution Control Boards, formal facilities, and interactive scrap grade price volatility graphs.
+              Surveillance folder hierarchy drilldown: <span className="font-bold text-slate-800">State SPCB Folders</span> → <span className="font-bold text-slate-800">Recycler Company Facilities</span> → <span className="font-bold text-slate-800">Scrap Collectors</span> → <span className="font-bold text-slate-800">Full Audited Transactions</span>.
             </p>
           </div>
 
-          {/* Export & Graph Quick Action Buttons */}
-          <div className="flex flex-wrap items-center gap-2.5">
+          {/* Quick Action Toolbar */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => handleOpenPriceModal('Printed Circuit Boards (Motherboard)', 'mat_pcb_high', 495)}
-              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-mono flex items-center gap-2 transition-colors cursor-pointer shadow-xs"
-              title="Open the fixed live material price trends and statutory MSP graph"
+              onClick={() =>
+                setSelectedLotForModal({
+                  lotName: 'Printed Circuit Boards (Motherboard)',
+                  materialId: 'mat_pcb_high',
+                  currentRate: 495
+                })
+              }
+              className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold font-mono flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+              title="Inspect Live Scrap Mandi Index against CPCB Floor Rate"
             >
               <TrendingUp className="w-3.5 h-3.5" />
-              <span>📊 Live Scrap Price Trends Graph</span>
+              <span>CPCB Mandi Trends</span>
             </button>
+
             <button
               type="button"
               onClick={handleExportCsv}
-              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold font-mono flex items-center gap-2 transition-colors cursor-pointer"
-              title="Export filtered records to official CPCB CSV"
+              className="px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold font-mono flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Download Filtered Records as CSV"
             >
               <Download className="w-3.5 h-3.5 text-emerald-700" />
               <span>Export CSV</span>
             </button>
+
             <button
               type="button"
               onClick={() => {
@@ -572,949 +902,993 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
                 setDeleteError(null);
                 setDeleteSuccess(null);
               }}
-              className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-xl text-xs font-bold font-mono flex items-center gap-2 transition-colors cursor-pointer shadow-2xs"
-              title="Delete or purge filtered transaction records using statutory clearance key 12345678"
+              className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 rounded-lg text-xs font-bold font-mono flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Purge or delete records using Statutory Key 12345678"
             >
-              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-              <span>🗑️ Delete Data (Key: 12345678)</span>
+              <Trash2 className="w-3.5 h-3.5 text-rose-700" />
+              <span>Delete Data (Key: 12345678)</span>
             </button>
           </div>
         </div>
 
-        {/* View Mode Tabs (Authorities Folder / Vendors Folder / Flat Table / Recycle Bin) */}
-        <div className="flex items-center space-x-2 border-t border-slate-200 pt-4 mt-5 overflow-x-auto">
-          {[
-            { id: 'authorities', label: '1. Regulatory Authority Folders (SPCBs)', icon: Folder, count: REGULATORY_AUTHORITIES.length },
-            { id: 'vendors', label: '2. Vendor / Recycler Plant Folders', icon: Building2, count: NATIONAL_VENDOR_FACILITIES.length },
-            { id: 'collectors', label: '3. Collector Aggregator Directories', icon: User, count: summaryMetrics.uniqueCollectors },
-            { id: 'all_transactions', label: '4. Master All-Transactions Ledger', icon: Layers, count: allCombinedTransactions.length },
-            { id: 'recycle_bin', label: '5. 🗑️ Statutory Recycle Bin (12-Day Safe Custody)', icon: Trash2, count: recycleBin.length }
-          ].map((mode) => {
-            const Icon = mode.icon;
-            const isActive = explorerMode === mode.id;
-            return (
-              <button
-                key={mode.id}
-                type="button"
-                onClick={() => {
-                  setExplorerMode(mode.id as ExplorerMode);
-                  if (mode.id === 'all_transactions' || mode.id === 'recycle_bin') {
-                    handleResetBreadcrumbs();
-                  }
-                }}
-                className={`px-4 py-2 rounded-xl text-xs font-bold font-mono flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
-                  isActive
-                    ? mode.id === 'recycle_bin'
-                      ? 'bg-rose-600 text-white shadow-xs'
-                      : 'bg-emerald-600 text-white shadow-xs'
-                    : mode.id === 'recycle_bin'
-                    ? 'bg-rose-50 text-rose-700 hover:text-rose-900 hover:bg-rose-100 border border-rose-200'
-                    : 'bg-slate-100 text-slate-700 hover:text-slate-900 hover:bg-slate-200 border border-slate-200'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{mode.label}</span>
-                <span className={`px-1.5 py-0.2 text-[10px] rounded-md ${
-                  isActive
-                    ? 'bg-black/20 text-white'
-                    : mode.id === 'recycle_bin'
-                    ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                    : 'bg-white text-slate-700 border border-slate-200'
-                }`}>
-                  {mode.count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Navigation Breadcrumb Bar */}
-      {(selectedAuthorityId || selectedVendorId || selectedCollectorId) && (
-        <div className="flex items-center gap-2 text-xs font-mono bg-white border border-slate-200 px-4 py-2.5 rounded-2xl shadow-2xs">
+        {/* SUB-VIEW TABS: Dossier vs Recycle Bin */}
+        <div className="flex items-center gap-2 border-t border-slate-200 pt-3.5 mt-4">
           <button
             type="button"
-            onClick={handleResetBreadcrumbs}
-            className="text-emerald-700 hover:underline flex items-center gap-1 font-bold cursor-pointer"
+            onClick={() => {
+              setActiveSubTab('dossier');
+              setIsNationwideSearch(false);
+            }}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold font-mono flex items-center gap-2 transition-all cursor-pointer ${
+              activeSubTab === 'dossier' && !isNationwideSearch
+                ? 'bg-emerald-700 text-white shadow-xs'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+            }`}
           >
-            <FolderOpen className="w-3.5 h-3.5" />
-            <span>National Central Root</span>
+            <Folder className="w-3.5 h-3.5" />
+            <span>4-Tier State Folders</span>
           </button>
-
-          {currentAuthority && (
-            <>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedVendorId(null);
-                  setSelectedCollectorId(null);
-                }}
-                className={`font-bold hover:underline cursor-pointer ${
-                  !selectedVendorId ? 'text-slate-900' : 'text-slate-500'
-                }`}
-              >
-                {currentAuthority.name}
-              </button>
-            </>
-          )}
-
-          {currentVendor && (
-            <>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-              <span className="text-slate-900 font-bold">{currentVendor.name}</span>
-            </>
-          )}
 
           <button
             type="button"
-            onClick={handleResetBreadcrumbs}
-            className="ml-auto text-[11px] text-slate-500 hover:text-rose-600 font-sans cursor-pointer font-medium"
+            onClick={() => {
+              setActiveSubTab('dossier');
+              setIsNationwideSearch(true);
+            }}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold font-mono flex items-center gap-2 transition-all cursor-pointer ${
+              isNationwideSearch && activeSubTab === 'dossier'
+                ? 'bg-indigo-700 text-white shadow-xs'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+            }`}
           >
-            Clear Filter & Return to All
+            <Globe className="w-3.5 h-3.5" />
+            <span>Search All Transactions Nationwide</span>
           </button>
-        </div>
-      )}
 
-      {/* KPI Stats Ribbon */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-          <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Total Filtered Payouts</div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-emerald-700 mt-1">
-            ₹{(summaryMetrics.totalDisbursed / 100000).toFixed(2)} Lakhs
-          </div>
-          <div className="text-[11px] text-emerald-700 font-mono mt-0.5 font-semibold">100% Direct to Bank/UPI</div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-          <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Physical Mass Traced</div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-teal-700 mt-1">
-            {(summaryMetrics.totalWeightKg / 1000).toFixed(2)} MT
-          </div>
-          <div className="text-[11px] text-teal-700 font-mono mt-0.5 font-semibold">
-            {summaryMetrics.totalWeightKg.toLocaleString()} kg Total Weight
-          </div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-          <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Traded Counterparties</div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-indigo-700 mt-1">
-            {summaryMetrics.uniqueVendors} Vendors • {summaryMetrics.uniqueCollectors} Collectors
-          </div>
-          <div className="text-[11px] text-indigo-700 font-mono mt-0.5 font-semibold">Verified Bilateral Pairs</div>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs">
-          <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Flagged / Under Audit</div>
-          <div className="text-xl sm:text-2xl font-black font-mono text-amber-700 mt-1">
-            {summaryMetrics.totalFlagged} Lots
-          </div>
-          <div className="text-[11px] text-amber-700 font-mono mt-0.5 font-semibold">Discrepancy / Hazard Hold</div>
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('recycle_bin')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold font-mono flex items-center gap-2 transition-all cursor-pointer ${
+              activeSubTab === 'recycle_bin'
+                ? 'bg-rose-700 text-white shadow-xs'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+            }`}
+          >
+            <Archive className="w-3.5 h-3.5" />
+            <span>Statutory Recycle Bin ({recycleBin.length})</span>
+          </button>
         </div>
       </div>
 
-      {/* MODE 1: REGULATORY AUTHORITY FOLDERS VIEW */}
-      {explorerMode === 'authorities' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-800 uppercase font-mono flex items-center gap-2">
-              <Folder className="w-4 h-4 text-emerald-700" />
-              State Pollution Control Boards (SPCB) Jurisdictional Folders
-            </h2>
-            <span className="text-xs text-slate-500 font-mono">
-              Click any folder to inspect facilities and transactions under that authority
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {REGULATORY_AUTHORITIES.map((auth) => {
-              const isSelected = selectedAuthorityId === auth.id;
-              return (
-                <div
-                  key={auth.id}
-                  onClick={() => {
-                    if (selectedAuthorityId === auth.id) {
-                      setSelectedAuthorityId(null);
-                    } else {
-                      setSelectedAuthorityId(auth.id);
-                      setSelectedVendorId(null);
-                    }
-                  }}
-                  className={`border rounded-2xl p-4 transition-all cursor-pointer relative overflow-hidden group shadow-2xs ${
-                    isSelected
-                      ? 'bg-emerald-50/70 border-emerald-500 shadow-md ring-1 ring-emerald-500'
-                      : 'bg-white border-slate-200 hover:border-emerald-400 hover:shadow-sm'
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-700">
-                      {isSelected ? <FolderOpen className="w-5 h-5" /> : <Folder className="w-5 h-5" />}
-                    </div>
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                        auth.status === 'Operational'
-                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          : auth.status === 'Audit Underway'
-                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                          : 'bg-rose-100 text-rose-800 border border-rose-300'
-                      }`}
-                    >
-                      {auth.status}
-                    </span>
-                  </div>
-
-                  <div className="text-xs font-mono text-emerald-700 font-bold">{auth.code}</div>
-                  <h3 className="text-base font-bold text-slate-900 mt-0.5 group-hover:text-emerald-700 transition-colors">
-                    {auth.name}
-                  </h3>
-                  <div className="text-[11px] text-slate-500 mt-1 line-clamp-1">{auth.headquarters}</div>
-
-                  <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-slate-100 text-[11px] font-mono">
-                    <div>
-                      <div className="text-slate-400">Authorized Units</div>
-                      <div className="text-slate-800 font-bold">{auth.activeVendorsCount} Plants</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-400">Traded Volume</div>
-                      <div className="text-emerald-700 font-bold">{auth.totalTradedTons} MT</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-400">Compliance</div>
-                      <div className="text-teal-700 font-bold">{auth.complianceScore}%</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-400">Disbursed (Cr)</div>
-                      <div className="text-amber-700 font-bold">₹{auth.totalDisbursedCrores} Cr</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 text-[11px] text-emerald-700 font-bold flex items-center justify-between pt-1">
-                    <span>{isSelected ? 'Folder Opened (Filtered Below)' : 'Open Authority Dossier'}</span>
-                    <ChevronRight className="w-3.5 h-3.5 transform group-hover:translate-x-0.5 transition-transform" />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* MODE 2: VENDOR / RECYCLER PLANT FOLDERS VIEW */}
-      {explorerMode === 'vendors' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-800 uppercase font-mono flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-emerald-700" />
-              CPCB Authorized Recycler & Smelting Vendor Folders
-            </h2>
-            <span className="text-xs text-slate-500 font-mono">
-              Select any vendor plant to view inward collector lots and payout manifests
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {NATIONAL_VENDOR_FACILITIES.map((vendor) => {
-              const isSelected = selectedVendorId === vendor.id;
-              return (
-                <div
-                  key={vendor.id}
-                  onClick={() => {
-                    if (selectedVendorId === vendor.id) {
-                      setSelectedVendorId(null);
-                    } else {
-                      setSelectedVendorId(vendor.id);
-                    }
-                  }}
-                  className={`border rounded-2xl p-4 transition-all cursor-pointer relative overflow-hidden group shadow-2xs ${
-                    isSelected
-                      ? 'bg-indigo-50/70 border-indigo-500 shadow-md ring-1 ring-indigo-500'
-                      : 'bg-white border-slate-200 hover:border-indigo-400 hover:shadow-sm'
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700">
-                      <Building2 className="w-5 h-5" />
-                    </div>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                      Rating: {vendor.complianceRating || 'A+'}
-                    </span>
-                  </div>
-
-                  <div className="text-[11px] font-mono text-emerald-700 font-bold">{vendor.cpcbId}</div>
-                  <h3 className="text-sm font-bold text-slate-900 mt-0.5 line-clamp-1 group-hover:text-indigo-700 transition-colors">
-                    {vendor.name}
-                  </h3>
-                  <div className="text-[11px] text-slate-500 mt-1 line-clamp-1 flex items-center gap-1">
-                    <MapPin className="w-3 h-3 text-slate-400" />
-                    {vendor.location}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-slate-100 text-[11px] font-mono">
-                    <div>
-                      <div className="text-slate-400">Monthly Quota</div>
-                      <div className="text-slate-800 font-bold">{vendor.monthlyQuotaTons} MT</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-400">Processed MTD</div>
-                      <div className="text-teal-700 font-bold">{vendor.processedThisMonthTons} MT</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-400">Active Kabadiwalas</div>
-                      <div className="text-indigo-700 font-bold">{vendor.activeCollectors}</div>
-                    </div>
-                    <div>
-                      <div className="text-slate-400">EPR Yield</div>
-                      <div className="text-amber-700 font-bold">{vendor.eprCreditsGeneratedTons} MT</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 text-[11px] text-indigo-700 font-bold flex items-center justify-between pt-1">
-                    <span>{isSelected ? 'Folder Opened (Filtered Below)' : 'Inspect Vendor Transactions'}</span>
-                    <ChevronRight className="w-3.5 h-3.5 transform group-hover:translate-x-0.5 transition-transform" />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* MODE 5: STATUTORY 12-DAY RETENTION RECYCLE BIN VIEW */}
-      {explorerMode === 'recycle_bin' ? (
-        <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-xs space-y-6 p-5 sm:p-6">
-          {/* Recycle Bin Statutory Header */}
-          <div className="bg-rose-50/70 border border-rose-200 rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-start gap-3.5">
-              <div className="w-12 h-12 rounded-2xl bg-rose-100 border border-rose-300 flex items-center justify-center text-rose-600 shrink-0 mt-0.5">
-                <Trash2 className="w-6 h-6" />
-              </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-full bg-rose-200 text-rose-900 border border-rose-300 text-[10px] font-mono font-bold uppercase tracking-wider">
-                    Statutory 12-Day Safe Custody Protocol
-                  </span>
-                  <span className="text-xs text-slate-500 font-mono">
-                    CPCB Circular 2026/RET-12 Mandatory Hold
-                  </span>
-                </div>
-                <h2 className="text-lg font-black text-slate-900 mt-1 font-mono">
-                  Government Statutory Recycle Bin (12-Day Quarantine)
-                </h2>
-                <p className="text-xs text-slate-600 mt-1 max-w-2xl leading-relaxed">
-                  Records deleted from active portals using Clearance Key <code className="bg-white px-1.5 py-0.5 rounded border border-rose-200 font-bold text-rose-700">12345678</code> are held in this safe-custody archive for a mandatory 12 calendar days. Authorized officers can restore any record back to active state at any time during this quarantine window with zero data loss.
-                </p>
-              </div>
+      {/* VIEW 1: RECYCLE BIN VIEW */}
+      {activeSubTab === 'recycle_bin' && (
+        <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Archive className="w-4 h-4 text-rose-700" />
+                Statutory 12-Day Safe Custody Retention Bin
+              </h2>
+              <p className="text-xs text-slate-600 mt-0.5">
+                Under CPCB Rule 14(2), deleted transaction records remain held for 12 days before permanent cryptographic erasure.
+              </p>
             </div>
-
-            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+            {recycleBin.length > 0 && (
               <button
                 type="button"
                 onClick={handleEmptyRecycleBin}
-                disabled={recycleBin.length === 0}
-                className="px-3.5 py-2 bg-white hover:bg-rose-100 text-slate-700 hover:text-rose-800 border border-slate-300 hover:border-rose-300 rounded-xl text-xs font-bold font-mono transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
-                title="Wipe expired items from quarantine"
+                className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold font-mono rounded-lg transition-colors cursor-pointer"
               >
-                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                <span>Empty Expired Archive</span>
+                Empty Bin Permanently
               </button>
-            </div>
+            )}
           </div>
 
-          {/* Recycle Bin Metrics */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-              <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Quarantined Records</div>
-              <div className="text-2xl font-black font-mono text-rose-700 mt-1">{recycleBin.length} Items</div>
-              <div className="text-[11px] text-slate-500 font-mono mt-0.5">Holding in regulatory safe custody</div>
+          {recycleBin.length === 0 ? (
+            <div className="text-center py-12 bg-slate-50 rounded-xl border border-slate-200 text-slate-600 font-mono text-xs">
+              <CheckCircle2 className="w-8 h-8 text-emerald-700 mx-auto mb-2 opacity-80" />
+              No records in the 12-day retention bin. All active transaction ledgers are fully synchronized.
             </div>
-
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-              <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Total Quarantined Valuation</div>
-              <div className="text-2xl font-black font-mono text-slate-900 mt-1">
-                ₹{recycleBin.reduce((acc, r) => acc + (r.transactionData?.totalAmount || 0), 0).toLocaleString('en-IN')}
-              </div>
-              <div className="text-[11px] text-slate-500 font-mono mt-0.5">Disbursed transaction volume</div>
-            </div>
-
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-              <div className="text-[11px] font-mono text-slate-500 uppercase font-semibold">Retention Guarantee</div>
-              <div className="text-2xl font-black font-mono text-emerald-700 mt-1">12 Days Active</div>
-              <div className="text-[11px] text-emerald-700 font-mono mt-0.5">1-click instant restoration available</div>
-            </div>
-          </div>
-
-          {/* Quarantined Records Table */}
-          <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
-            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-              <div className="text-xs font-bold font-mono text-slate-800 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-rose-600" />
-                <span>Quarantined Records Pending Retention Expiry ({recycleBin.length})</span>
-              </div>
-              <div className="text-[11px] text-slate-500 font-mono">
-                Mandatory 12-Day Countdown Active
-              </div>
-            </div>
-
-            <div className="overflow-x-auto">
+          ) : (
+            <div className="overflow-x-auto border border-slate-200 rounded-xl">
               <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-slate-100 text-slate-600 uppercase tracking-wider border-b border-slate-200">
+                <thead className="bg-slate-100 text-slate-700 uppercase border-b border-slate-200 font-bold">
                   <tr>
-                    <th className="py-3 px-4">Record / Lot ID</th>
-                    <th className="py-3 px-4">Material Grade</th>
-                    <th className="py-3 px-4">Facility & Collector</th>
-                    <th className="py-3 px-4">Mass & Valuation</th>
-                    <th className="py-3 px-4">Deleted Time & Key</th>
-                    <th className="py-3 px-4">Mandatory 12-Day Countdown</th>
-                    <th className="py-3 px-4 text-right">Action</th>
+                    <th className="py-2.5 px-3">Deleted Record</th>
+                    <th className="py-2.5 px-3">Material & Grade</th>
+                    <th className="py-2.5 px-3">Collector</th>
+                    <th className="py-2.5 px-3">Amount</th>
+                    <th className="py-2.5 px-3">Retention Period</th>
+                    <th className="py-2.5 px-3 text-right">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-800">
-                  {recycleBin.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-400 font-mono">
-                        <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
-                        Recycle Bin is currently empty. No records are pending statutory retention.
-                      </td>
-                    </tr>
-                  ) : (
-                    recycleBin.map((item) => {
-                      const retention = getRetentionRemaining(item.expiresAt);
-                      const totalMs = item.retentionDays * 24 * 60 * 60 * 1000;
-                      const pctRemaining = Math.max(0, Math.min(100, Math.round(((item.expiresAt - Date.now()) / totalMs) * 100)));
-
-                      return (
-                        <tr key={item.id} className="hover:bg-rose-50/30 transition-colors">
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="font-bold text-slate-900">{item.transactionData?.id || item.id}</div>
-                            {item.lotId && (
-                              <div className="text-[10px] text-emerald-700 font-semibold mt-0.5">
-                                Lot: {item.lotId}
-                              </div>
-                            )}
-                            <div className="text-[9px] text-slate-400 font-mono mt-0.5">
-                              {item.transactionData?.settlementUtr || 'UTR-HOLD'}
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4">
-                            <div className="font-bold text-slate-900">{item.transactionData?.materialName || 'E-Waste Item'}</div>
-                            <div className="text-[10px] text-slate-500 uppercase">{item.transactionData?.category || 'General'}</div>
-                          </td>
-
-                          <td className="py-3 px-4">
-                            <div className="font-semibold text-slate-800 truncate max-w-[160px]">
-                              {item.transactionData?.vendorName || 'Recycling Unit'}
-                            </div>
-                            <div className="text-[10px] text-slate-500 mt-0.5">
-                              Seller: {item.transactionData?.collectorName || 'Kabadiwala'}
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="font-bold text-emerald-700">
-                              {item.transactionData?.weighbridgeWeightKg || item.transactionData?.declaredWeightKg || 0} kg
-                            </div>
-                            <div className="font-black text-amber-700 text-sm">
-                              ₹{(item.transactionData?.totalAmount || 0).toLocaleString('en-IN')}
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="text-slate-800">
-                              {new Date(item.deletedAt).toLocaleDateString('en-GB')} {new Date(item.deletedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </div>
-                            <div className="text-[10px] text-rose-700 font-bold mt-0.5 flex items-center gap-1">
-                              <Key className="w-3 h-3" />
-                              <span>Key: {item.deletedByKey}</span>
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4 whitespace-nowrap min-w-[190px]">
-                            <div className="flex items-center justify-between text-[11px] mb-1">
-                              <span className={`font-bold ${retention.isExpired ? 'text-rose-700' : 'text-slate-800'}`}>
-                                ⏱️ {retention.text}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-mono">
-                                {pctRemaining}%
-                              </span>
-                            </div>
-                            <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                              <div
-                                className={`h-2 rounded-full transition-all ${
-                                  pctRemaining > 50
-                                    ? 'bg-emerald-600'
-                                    : pctRemaining > 20
-                                    ? 'bg-amber-500'
-                                    : 'bg-rose-500'
-                                }`}
-                                style={{ width: `${pctRemaining}%` }}
-                              />
-                            </div>
-                            <div className="text-[9px] text-slate-400 mt-1">
-                              Retention until: {new Date(item.expiresAt).toLocaleDateString('en-GB')}
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4 text-right whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => handleRestoreRecord(item)}
-                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-mono transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-xs"
-                              title="Restore this record back to active records immediately"
-                            >
-                              <RotateCcw className="w-3.5 h-3.5" />
-                              <span>Restore Record / पूर्ववत करें</span>
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <>
-          {/* FILTER & SEARCH BAR */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-xs">
-            {/* Search Field */}
-            <div className="relative flex-1">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by Transaction ID, Lot ID, UTR, Collector, Vendor, SPCB or Material..."
-            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-600 font-mono"
-          />
-        </div>
-
-        {/* Filters Group */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-emerald-600 font-mono"
-          >
-            <option value="all">All Settlement Statuses</option>
-            <option value="settled">Settled (100% Paid)</option>
-            <option value="processing">Processing (Weighbridge)</option>
-            <option value="flagged">Flagged (Anomaly)</option>
-            <option value="rejected">Rejected (Hazard Breach)</option>
-          </select>
-
-          {/* Category Filter */}
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-emerald-600 font-mono"
-          >
-            <option value="all">All Material Categories</option>
-            <option value="pcb">PCBs & Motherboards</option>
-            <option value="copper">Copper Wires & Cables</option>
-            <option value="battery">Lithium & Lead Batteries</option>
-            <option value="telecom">Telecom & Network Cards</option>
-            <option value="solar">Solar PV Panels</option>
-            <option value="cooling">Cooling Compressors</option>
-            <option value="medical">Medical Diagnostics PCB</option>
-            <option value="plastic">Flame-Retardant E-Plastics</option>
-          </select>
-
-          {/* Sort By */}
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
-            className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-emerald-600 font-mono"
-          >
-            <option value="date">Sort by Date</option>
-            <option value="amount">Sort by Payout (₹)</option>
-            <option value="weight">Sort by Weight (kg)</option>
-          </select>
-
-          <button
-            type="button"
-            onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
-            className="p-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 hover:text-slate-900 cursor-pointer"
-            title={`Toggle order: current is ${sortOrder.toUpperCase()}`}
-          >
-            <ArrowUpDown className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* FOLDER TABLE CONTROLS & DROPDOWN DISPLAY (Hiding table behind dropdown) */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="text-xs font-bold text-slate-700 font-mono flex items-center gap-1.5">
-            <Folder className="w-4 h-4 text-emerald-700" />
-            <span>Select Folder Table:</span>
-          </label>
-          <select
-            value={selectedFolderTable}
-            onChange={(e) => setSelectedFolderTable(e.target.value as any)}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-          >
-            <option value="transactions">📂 Bilateral Transactions Ledger ({filteredTransactions.length} items)</option>
-            <option value="authorities">🏛️ State PCB Regulatory Folders ({REGULATORY_AUTHORITIES.length} authorities)</option>
-            <option value="vendors">🏭 Registered Recycling Plants ({NATIONAL_VENDOR_FACILITIES.length} facilities)</option>
-            <option value="collectors">🛵 Certified Aggregator Directory ({summaryMetrics.uniqueCollectors} collectors)</option>
-          </select>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setIsTableDropdownOpen(!isTableDropdownOpen)}
-          className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold font-mono flex items-center gap-1.5 transition-colors cursor-pointer self-start md:self-auto"
-        >
-          {isTableDropdownOpen ? (
-            <>
-              <ChevronUp className="w-3.5 h-3.5 text-slate-600" />
-              <span>Hide Tables Inside Dropdown</span>
-            </>
-          ) : (
-            <>
-              <ChevronDown className="w-3.5 h-3.5 text-emerald-700" />
-              <span>Show / Expand Table View</span>
-            </>
-          )}
-        </button>
-      </div>
-
-      {!isTableDropdownOpen ? (
-        <div className="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-6 text-center">
-          <Folder className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-          <p className="text-xs font-mono font-bold text-slate-700">
-            Government Folder Table is collapsed inside the dropdown menu above.
-          </p>
-          <p className="text-[11px] text-slate-500 mt-1">
-            Current active view: <span className="font-bold text-emerald-700">{selectedFolderTable.toUpperCase()}</span> ({filteredTransactions.length} records).
-          </p>
-          <button
-            type="button"
-            onClick={() => setIsTableDropdownOpen(true)}
-            className="mt-3 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-mono inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
-          >
-            <Eye className="w-3.5 h-3.5" />
-            <span>Open & View Selected Table</span>
-          </button>
-        </div>
-      ) : (
-      /* MASTER TRANSACTIONS TABLE */
-      <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-xs">
-        <div className="p-4 sm:p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50/60">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 uppercase font-mono flex items-center gap-2">
-              <Layers className="w-4 h-4 text-emerald-700" />
-              Categorised National Transaction Records Ledger ({filteredTransactions.length} Verified Bilateral Records)
-            </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Tip: Click on any <span className="text-emerald-700 font-bold">Lot Name card</span> to open its fixed real-time price change and volatility graph.
-            </p>
-          </div>
-          <div className="text-xs font-mono text-slate-600">
-            Total Ledger Valuation: <span className="text-emerald-700 font-bold">₹{summaryMetrics.totalDisbursed.toLocaleString('en-IN')}</span>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs font-mono">
-            <thead className="bg-slate-50 text-slate-600 uppercase tracking-wider border-b border-slate-200">
-              <tr>
-                <th className="py-3 px-4">Txn / UTR Ref</th>
-                <th className="py-3 px-4">Lot Name & Grade (Tap for Graph)</th>
-                <th className="py-3 px-4">Buyer (Vendor / Plant)</th>
-                <th className="py-3 px-4">Seller (Collector)</th>
-                <th className="py-3 px-4">Weight (kg)</th>
-                <th className="py-3 px-4">Rate (₹/kg)</th>
-                <th className="py-3 px-4">Total Amount</th>
-                <th className="py-3 px-4">Status & Compliance</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-800">
-              {filteredTransactions.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400 font-mono">
-                    <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto mb-2" />
-                    No transactions matching the selected folder or search query.
-                  </td>
-                </tr>
-              ) : (
-                filteredTransactions.map((tx) => {
-                  return (
-                    <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
-                      {/* Txn ID & Date */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                          <span>{tx.id}</span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-1">
-                          <Calendar className="w-3 h-3 text-slate-400" />
-                          {tx.timestamp}
-                        </div>
-                        <div className="text-[9px] text-slate-400 truncate max-w-[140px] font-mono mt-0.5">
-                          {tx.settlementUtr}
-                        </div>
-                      </td>
-
-                      {/* LOT NAME (CLICKABLE INTERACTIVE CARD TO VIEW PRICE GRAPH) */}
-                      <td className="py-3 px-4">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenPriceModal(tx.materialName, tx.materialId, tx.ratePerKg, tx.lotId)}
-                          className="group/lot flex items-start gap-2 text-left p-2 rounded-xl bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 transition-all cursor-pointer w-full max-w-[240px]"
-                          title="Click to view historical price change graph and volatility index for this lot"
-                        >
-                          <div className="w-7 h-7 rounded-lg bg-emerald-100 border border-emerald-200 flex items-center justify-center shrink-0 mt-0.5 group-hover/lot:bg-emerald-600 group-hover/lot:text-white text-emerald-700 transition-colors">
-                            <TrendingUp className="w-3.5 h-3.5" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-slate-900 group-hover/lot:text-emerald-800 transition-colors line-clamp-1">
-                              {tx.materialName}
-                            </div>
-                            <div className="flex items-center gap-1.5 mt-0.5">
-                              <span className="text-[10px] font-mono text-emerald-700 font-bold">
-                                Lot: {tx.lotId}
-                              </span>
-                              <span className="text-[10px] text-slate-400">•</span>
-                              <span className="text-[10px] text-indigo-700 uppercase font-semibold">
-                                {tx.category}
-                              </span>
-                            </div>
-                            <div className="text-[9px] text-emerald-700 font-sans flex items-center gap-0.5 mt-1 font-bold group-hover/lot:underline">
-                              <span>View Price Graph</span>
-                              <ChevronRight className="w-2.5 h-2.5" />
-                            </div>
-                          </div>
-                        </button>
-                      </td>
-
-                      {/* VENDOR (BUYER) */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-semibold text-slate-900 flex items-center gap-1.5">
-                          <Building2 className="w-3.5 h-3.5 text-indigo-700" />
-                          <span className="truncate max-w-[170px]">{tx.vendorName}</span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">{tx.vendorCpcbId}</div>
-                        <div className="text-[9px] text-slate-400 font-mono">{tx.statePcb}</div>
-                      </td>
-
-                      {/* COLLECTOR (SELLER) */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                          <User className="w-3.5 h-3.5 text-teal-700" />
-                          <span>{tx.collectorName}</span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">{tx.collectorPhone}</div>
-                        <div className="text-[9px] text-slate-400">{tx.collectorWard}</div>
-                      </td>
-
-                      {/* WEIGHT */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-bold text-emerald-700">
-                          {tx.weighbridgeWeightKg ? `${tx.weighbridgeWeightKg} kg` : `${tx.declaredWeightKg} kg`}
-                        </div>
-                        <div className="text-[10px] text-slate-500">
-                          {tx.weighbridgeWeightKg ? 'Weighbridge Net' : 'Declared Est.'}
-                        </div>
-                      </td>
-
-                      {/* RATE PER KG */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-bold text-slate-900">₹{tx.ratePerKg} / kg</div>
-                        <div className="text-[10px] text-slate-500 font-mono">CPCB Schedule Base</div>
-                      </td>
-
-                      {/* TOTAL AMOUNT */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-black text-amber-700 text-sm">
-                          ₹{tx.totalAmount.toLocaleString('en-IN')}
-                        </div>
-                        <div className="text-[10px] text-slate-500 font-mono">{tx.paymentMode} Disbursed</div>
-                      </td>
-
-                      {/* STATUS & COMPLIANCE */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="flex flex-col gap-1">
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {recycleBin.map((item) => {
+                    const retention = getRetentionRemaining(item.expiresAt);
+                    return (
+                      <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-2.5 px-3">
+                          <span className="font-bold text-slate-900">{item.transactionData.id}</span>
+                          <span className="text-[10px] block text-slate-500">
+                            Deleted: {new Date(item.deletedAt).toLocaleDateString()}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-slate-800">
+                          {item.transactionData.materialName}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-700">
+                          {item.transactionData.collectorName}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-emerald-800 tabular-nums">
+                          ₹{item.transactionData.totalAmount?.toLocaleString('en-IN') || 0}
+                        </td>
+                        <td className="py-2.5 px-3">
                           <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold inline-block w-fit ${
-                              tx.paymentStatus === 'settled'
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                : tx.paymentStatus === 'flagged'
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              retention.isExpired
                                 ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                                : tx.paymentStatus === 'rejected'
-                                ? 'bg-red-100 text-red-800 border border-red-300'
                                 : 'bg-amber-100 text-amber-800 border border-amber-300'
                             }`}
                           >
-                            {tx.paymentStatus.toUpperCase()}
+                            {retention.text}
                           </span>
-
-                          {tx.anomalyFlag && (
-                            <span className="text-[9px] text-rose-700 font-sans flex items-center gap-1 font-bold">
-                              <AlertTriangle className="w-2.5 h-2.5" />
-                              Anomaly Alert
-                            </span>
-                          )}
-
-                          {tx.eprCertificateNo && (
-                            <span className="text-[9px] text-emerald-700 font-mono font-semibold">
-                              EPR Verified
-                            </span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* ACTIONS */}
-                      <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
                           <button
                             type="button"
-                            onClick={() => setInspectingTxn(tx)}
-                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-lg text-[11px] font-bold font-mono transition-colors cursor-pointer inline-flex items-center gap-1 shadow-2xs"
-                            title="Inspect digital manifest and statutory audit trail"
+                            onClick={() => handleRestoreRecord(item)}
+                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded font-bold text-xs flex items-center gap-1 ml-auto cursor-pointer"
                           >
-                            <Eye className="w-3 h-3 text-emerald-700" />
-                            <span>Audit Trail</span>
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Restore</span>
                           </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDeleteModal({ isOpen: true, txn: tx, isPurgeAll: false });
-                              setSecurityKeyInput('');
-                              setDeleteError(null);
-                              setDeleteSuccess(null);
-                            }}
-                            className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 border border-rose-200 rounded-lg transition-colors cursor-pointer"
-                            title="Statutory removal with Key 12345678"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      </div>
-      )}
-      </>
       )}
 
-      {/* TRANSACTION INSPECTION AUDIT TRAIL MODAL */}
-      {inspectingTxn && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center p-3 sm:p-4 md:p-6 bg-slate-900/60 backdrop-blur-xs overflow-y-auto animate-fadeIn">
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl my-4 text-slate-900">
-            {/* Header */}
-            <div className="p-5 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700">
-                  <ShieldCheck className="w-5 h-5" />
+      {/* VIEW 2: PRIMARY DOSSIER HIERARCHY */}
+      {activeSubTab === 'dossier' && (
+        <div className="space-y-4">
+          {/* INTERACTIVE BREADCRUMB NAVIGATION TRAIL */}
+          {!isNationwideSearch && (
+            <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+              <nav className="flex flex-wrap items-center gap-1.5 text-xs font-mono font-bold" aria-label="Breadcrumb">
+                {/* Root Level: All States */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedState(null);
+                    setSelectedAuthorityId(null);
+                    setSelectedVendorId(null);
+                    setSelectedCollectorId(null);
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                    currentTier === 'states'
+                      ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                >
+                  <Globe className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>National (All States)</span>
+                </button>
+
+                {/* Level 2: State */}
+                {selectedState && (
+                  <>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedVendorId(null);
+                        setSelectedCollectorId(null);
+                      }}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                        currentTier === 'recyclers'
+                          ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Folder className="w-3.5 h-3.5 text-emerald-700" />
+                      <span>{selectedState}</span>
+                    </button>
+                  </>
+                )}
+
+                {/* Level 3: Recycler Facility */}
+                {currentVendor && (
+                  <>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCollectorId(null);
+                      }}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors cursor-pointer truncate max-w-[220px] ${
+                        currentTier === 'collectors'
+                          ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                      title={currentVendor.name}
+                    >
+                      <Building2 className="w-3.5 h-3.5 text-indigo-700" />
+                      <span>{currentVendor.name}</span>
+                    </button>
+                  </>
+                )}
+
+                {/* Level 4: Scrap Collector */}
+                {currentCollector && (
+                  <>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold">
+                      <User className="w-3.5 h-3.5 text-emerald-800" />
+                      <span>{currentCollector.collectorName}</span>
+                    </span>
+                  </>
+                )}
+              </nav>
+
+              {/* ONE-CLICK BACK BUTTON */}
+              {currentTier !== 'states' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (currentTier === 'transactions') setSelectedCollectorId(null);
+                    else if (currentTier === 'collectors') setSelectedVendorId(null);
+                    else if (currentTier === 'recyclers') {
+                      setSelectedState(null);
+                      setSelectedAuthorityId(null);
+                    }
+                  }}
+                  className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold font-mono flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>
+                    Back to{' '}
+                    {currentTier === 'transactions'
+                      ? 'Collectors'
+                      : currentTier === 'collectors'
+                      ? 'Recycler Units'
+                      : 'States'}
+                  </span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* SEARCH & MULTI-FACETED AUDIT FILTER TOOLBAR */}
+          <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-4 space-y-3 shadow-2xs">
+            <div className="flex flex-col md:flex-row md:items-center gap-3">
+              {/* Search Bar */}
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={
+                    isNationwideSearch
+                      ? 'Search ALL nationwide records (by Lot ID, UTR, Kabadiwala, Plant, State)...'
+                      : currentTier === 'states'
+                      ? 'Filter states (e.g. Maharashtra, Gujarat, Karnataka)...'
+                      : currentTier === 'recyclers'
+                      ? 'Filter recycler plants in this state (e.g. EcoMetals, CPCB ID)...'
+                      : currentTier === 'collectors'
+                      ? 'Filter scrap collectors (e.g. Santosh Yadav, Raju Kumar, Phone)...'
+                      : 'Search transactions in this folder (by Lot ID, UTR, material)...'
+                  }
+                  className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-900 placeholder:text-slate-400 focus:outline-hidden focus:border-emerald-600 focus:bg-white transition-all"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Status Filter */}
+              <div className="flex items-center gap-2">
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-mono text-slate-700 focus:outline-hidden focus:border-emerald-600 cursor-pointer"
+                  aria-label="Filter by payment status"
+                >
+                  <option value="all">Status: All Records</option>
+                  <option value="settled">Settled (Verified)</option>
+                  <option value="processing">Processing (Pending)</option>
+                  <option value="flagged">Flagged / Hold (Anomaly)</option>
+                  <option value="rejected">Rejected Lots</option>
+                </select>
+
+                {/* Material Category Filter */}
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-mono text-slate-700 focus:outline-hidden focus:border-emerald-600 cursor-pointer"
+                  aria-label="Filter by material category"
+                >
+                  <option value="all">Category: All</option>
+                  <option value="pcb">Printed Circuit Boards</option>
+                  <option value="copper">Copper / Cables</option>
+                  <option value="battery">Li-ion Batteries</option>
+                  <option value="magnet">Rare-Earth Magnets</option>
+                  <option value="plastic">E-Plastics</option>
+                  <option value="crt">CRT Displays</option>
+                </select>
+
+                {/* Payment Mode Filter */}
+                <select
+                  value={paymentModeFilter}
+                  onChange={(e) => setPaymentModeFilter(e.target.value as any)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-mono text-slate-700 focus:outline-hidden focus:border-emerald-600 cursor-pointer"
+                  aria-label="Filter by payment mode"
+                >
+                  <option value="all">Mode: All</option>
+                  <option value="UPI">UPI Instant</option>
+                  <option value="CASH">CASH Handover</option>
+                  <option value="ESCROW">ESCROW Guarantee</option>
+                  <option value="NEFT">NEFT / RTGS</option>
+                </select>
+
+                {/* Sort By */}
+                <select
+                  value={`${sortBy}-${sortOrder}`}
+                  onChange={(e) => {
+                    const [sb, so] = e.target.value.split('-');
+                    setSortBy(sb as any);
+                    setSortOrder(so as any);
+                  }}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-mono text-slate-700 focus:outline-hidden focus:border-emerald-600 cursor-pointer"
+                  aria-label="Sort records by"
+                >
+                  <option value="date-desc">Date: Newest First</option>
+                  <option value="date-asc">Date: Oldest First</option>
+                  <option value="amount-desc">Amount: High → Low</option>
+                  <option value="weight-desc">Weight: High → Low</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* DRILLDOWN LEVEL 1: STATE FOLDERS */}
+          {!isNationwideSearch && currentTier === 'states' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs font-mono font-bold uppercase text-slate-600 flex items-center gap-1.5">
+                  <Folder className="w-3.5 h-3.5 text-emerald-700" />
+                  Select State SPCB Folder ({searchedStateFolders.length} States Monitored)
+                </span>
+                <span className="text-[11px] font-mono text-slate-500">
+                  Click a state folder to inspect its licensed recycling facilities
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {searchedStateFolders.map((st) => (
+                  <button
+                    key={st.authority.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedState(st.stateName);
+                      setSelectedAuthorityId(st.authority.id);
+                      setSearchQuery('');
+                    }}
+                    className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-emerald-600 rounded-xl p-4 text-left transition-all group shadow-2xs hover:shadow-xs cursor-pointer flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="w-10 h-10 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white transition-colors">
+                          <Folder className="w-5 h-5" />
+                        </div>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-slate-100 text-slate-700 border border-slate-200">
+                          {st.spcbCode}
+                        </span>
+                      </div>
+
+                      <h3 className="text-sm font-bold text-slate-900 group-hover:text-emerald-800 transition-colors">
+                        {st.stateName}
+                      </h3>
+                      <p className="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                        {st.authority.fullName}
+                      </p>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-3 gap-2 text-center font-mono">
+                      <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                        <span className="text-[10px] text-slate-500 block uppercase">Recyclers</span>
+                        <span className="text-xs font-bold text-slate-900">{st.facilitiesCount}</span>
+                      </div>
+                      <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                        <span className="text-[10px] text-slate-500 block uppercase">Volume</span>
+                        <span className="text-xs font-bold text-emerald-800">{st.totalWeightMT} MT</span>
+                      </div>
+                      <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                        <span className="text-[10px] text-slate-500 block uppercase">Disbursed</span>
+                        <span className="text-xs font-bold text-slate-900">₹{(st.totalDisbursed / 100000).toFixed(1)}L</span>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* DRILLDOWN LEVEL 2: RECYCLER COMPANY FOLDERS */}
+          {!isNationwideSearch && currentTier === 'recyclers' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs font-mono font-bold uppercase text-slate-600 flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-indigo-700" />
+                  Authorized Recycler Facilities in {selectedState} ({searchedRecyclerFolders.length} Units)
+                </span>
+                <span className="text-[11px] font-mono text-slate-500">
+                  Select a recycler facility to inspect scrap collector deliveries
+                </span>
+              </div>
+
+              {searchedRecyclerFolders.length === 0 ? (
+                <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs font-mono text-slate-600">
+                  No licensed recycler facilities found matching your criteria in {selectedState}.
                 </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {searchedRecyclerFolders.map(({ facility: fac, transactionsCount, collectorsCount, totalWeightKg, totalDisbursed, quotaUsagePct }) => (
+                    <button
+                      key={fac.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedVendorId(fac.id);
+                        setSearchQuery('');
+                      }}
+                      className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-indigo-600 rounded-xl p-4 text-left transition-all group shadow-2xs hover:shadow-xs cursor-pointer flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="w-10 h-10 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 group-hover:bg-indigo-700 group-hover:text-white transition-colors">
+                            <Building2 className="w-5 h-5" />
+                          </div>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-indigo-50 text-indigo-800 border border-indigo-200">
+                            Rating: {fac.complianceRating || 'A+'}
+                          </span>
+                        </div>
+
+                        <h3 className="text-sm font-bold text-slate-900 group-hover:text-indigo-900 transition-colors">
+                          {fac.name}
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] font-mono text-slate-500">
+                          <span>CPCB: {fac.cpcbId}</span>
+                          <span>•</span>
+                          <span>{fac.location}</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-4 gap-2 text-center font-mono">
+                        <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                          <span className="text-[10px] text-slate-500 block uppercase">Collectors</span>
+                          <span className="text-xs font-bold text-slate-900">{collectorsCount}</span>
+                        </div>
+                        <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                          <span className="text-[10px] text-slate-500 block uppercase">Transacted</span>
+                          <span className="text-xs font-bold text-slate-900">{transactionsCount}</span>
+                        </div>
+                        <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                          <span className="text-[10px] text-slate-500 block uppercase">Total Scrap</span>
+                          <span className="text-xs font-bold text-emerald-800">{(totalWeightKg / 1000).toFixed(2)} MT</span>
+                        </div>
+                        <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                          <span className="text-[10px] text-slate-500 block uppercase">Paid Out</span>
+                          <span className="text-xs font-bold text-slate-900">₹{(totalDisbursed / 1000).toFixed(0)}k</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* DRILLDOWN LEVEL 3: SCRAP COLLECTOR FOLDERS */}
+          {!isNationwideSearch && currentTier === 'collectors' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs font-mono font-bold uppercase text-slate-600 flex items-center gap-1.5">
+                  <User className="w-3.5 h-3.5 text-emerald-700" />
+                  Scrap Collectors at {currentVendor?.name} ({searchedCollectorFolders.length} Active Kabadiwalas)
+                </span>
+                <span className="text-[11px] font-mono text-slate-500">
+                  Select a collector folder to view complete transaction logs & payment UTRs
+                </span>
+              </div>
+
+              {searchedCollectorFolders.length === 0 ? (
+                <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs font-mono text-slate-600">
+                  No scrap collector transactions recorded yet at this facility.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {searchedCollectorFolders.map((col) => (
+                    <button
+                      key={col.collectorId}
+                      type="button"
+                      onClick={() => {
+                        setSelectedCollectorId(col.collectorId);
+                        setSearchQuery('');
+                      }}
+                      className="bg-white hover:bg-slate-50 border border-slate-200 hover:border-emerald-600 rounded-xl p-4 text-left transition-all group shadow-2xs hover:shadow-xs cursor-pointer flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="w-10 h-10 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white transition-colors">
+                            <User className="w-5 h-5" />
+                          </div>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                              col.collectorTier === 'Gold'
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                : col.collectorTier === 'Silver'
+                                ? 'bg-slate-100 text-slate-800 border border-slate-300'
+                                : 'bg-orange-50 text-orange-800 border border-orange-200'
+                            }`}
+                          >
+                            {col.collectorTier} Tier
+                          </span>
+                        </div>
+
+                        <h3 className="text-sm font-bold text-slate-900 group-hover:text-emerald-800 transition-colors">
+                          {col.collectorName}
+                        </h3>
+                        <div className="text-[11px] font-mono text-slate-500 space-y-0.5 mt-1">
+                          <div>ID: {col.collectorId}</div>
+                          <div>Phone: {col.collectorPhone}</div>
+                          <div>Depot: {col.collectorWard}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-slate-100 grid grid-cols-3 gap-2 text-center font-mono">
+                        <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                          <span className="text-[10px] text-slate-500 block uppercase">Lots</span>
+                          <span className="text-xs font-bold text-slate-900">{col.txnCount}</span>
+                        </div>
+                        <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                          <span className="text-[10px] text-slate-500 block uppercase">Weight</span>
+                          <span className="text-xs font-bold text-emerald-800">{col.totalWeightKg.toFixed(1)} kg</span>
+                        </div>
+                        <div className="bg-slate-50 rounded p-1.5 border border-slate-100">
+                          <span className="text-[10px] text-slate-500 block uppercase">Earned</span>
+                          <span className="text-xs font-bold text-slate-900">₹{col.totalEarnings.toLocaleString('en-IN')}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* DRILLDOWN LEVEL 4 OR NATIONWIDE SEARCH: FULL TRANSACTION LEDGER TABLE */}
+          {(isNationwideSearch || currentTier === 'transactions') && (
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs space-y-0">
+              {/* Header inside table */}
+              <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">
-                    Official CPCB Transaction Manifest & Audit Dossier
-                  </h3>
-                  <div className="text-xs font-mono text-slate-500">
-                    ID: {inspectingTxn.id} • Lot: {inspectingTxn.lotId}
-                  </div>
+                  <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-700" />
+                    {isNationwideSearch
+                      ? `Nationwide Surveillance Feed (${filteredTransactions.length} Records Found)`
+                      : `Audited Transactions for ${currentCollector?.collectorName} at ${currentVendor?.name}`}
+                  </h2>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    {isNationwideSearch
+                      ? 'Displaying all records across all states and recycling facilities matching filters.'
+                      : `State: ${selectedState} • Facility ID: ${selectedVendorId} • Collector ID: ${selectedCollectorId}`}
+                  </p>
                 </div>
+                <div className="text-xs font-mono font-bold text-slate-700 flex items-center gap-3">
+                  <span>Showing: {filteredTransactions.length} Entries</span>
+                  <span className="text-emerald-700">
+                    Total: ₹{filteredTransactions.reduce((acc, t) => acc + (t.totalAmount || 0), 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              {filteredTransactions.length === 0 ? (
+                <div className="p-12 text-center text-xs font-mono text-slate-500">
+                  No transaction records found matching your filters.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-100 text-slate-700 uppercase border-b border-slate-200 font-bold">
+                      <tr>
+                        {isNationwideSearch && <th className="py-2.5 px-3">State & Facility Trail</th>}
+                        <th className="py-2.5 px-3">Lot ID / Date</th>
+                        <th className="py-2.5 px-3">Material Grade</th>
+                        <th className="py-2.5 px-3 text-right">Weight (kg)</th>
+                        <th className="py-2.5 px-3 text-right">Rate (₹/kg)</th>
+                        <th className="py-2.5 px-3 text-right">Total Disbursed</th>
+                        <th className="py-2.5 px-3">Payment / UTR</th>
+                        <th className="py-2.5 px-3">Status</th>
+                        <th className="py-2.5 px-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 bg-white">
+                      {filteredTransactions.map((tx) => {
+                        const isSettled =
+                          tx.paymentStatus === 'settled' || tx.status === 'SETTLED' || tx.paymentStatus === 'verified';
+                        const isFlagged =
+                          tx.paymentStatus === 'flagged' || tx.anomalyFlag === true;
+
+                        return (
+                          <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
+                            {/* Nationwide Path Badges */}
+                            {isNationwideSearch && (
+                              <td className="py-2.5 px-3">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (tx.authorityId || tx.statePcb) {
+                                      const auth = REGULATORY_AUTHORITIES.find(
+                                        (a) => a.id === tx.authorityId
+                                      );
+                                      setSelectedState(auth ? auth.state : 'Maharashtra');
+                                      setSelectedAuthorityId(tx.authorityId || 'auth_mpcb');
+                                    }
+                                    if (tx.vendorId) setSelectedVendorId(tx.vendorId);
+                                    if (tx.collectorId) setSelectedCollectorId(tx.collectorId);
+                                    setIsNationwideSearch(false);
+                                  }}
+                                  className="text-[10px] text-left hover:underline cursor-pointer block"
+                                  title="Jump to this collector's folder"
+                                >
+                                  <span className="font-bold text-slate-900 block">
+                                    {tx.statePcb || 'Maharashtra'}
+                                  </span>
+                                  <span className="text-indigo-800 block truncate max-w-[160px]">
+                                    {tx.vendorName || 'EcoMetals Unit'}
+                                  </span>
+                                  <span className="text-emerald-800 block font-semibold truncate max-w-[160px]">
+                                    👤 {tx.collectorName || 'Santosh Yadav'}
+                                  </span>
+                                </button>
+                              </td>
+                            )}
+
+                            {/* Lot ID & Timestamp */}
+                            <td className="py-2.5 px-3">
+                              <span className="font-bold text-slate-900">{tx.lotId || tx.id}</span>
+                              <span className="text-[10px] block text-slate-500">
+                                {tx.date || tx.timestamp?.split('T')[0]}
+                              </span>
+                            </td>
+
+                            {/* Material & Hazard Flag */}
+                            <td className="py-2.5 px-3">
+                              <span className="font-medium text-slate-900 block">
+                                {tx.materialName}
+                              </span>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600 border border-slate-200">
+                                  {tx.category || 'pcb'}
+                                </span>
+                                {isFlagged && (
+                                  <span className="px-1.5 py-0.2 rounded text-[10px] font-bold uppercase bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-0.5">
+                                    <AlertTriangle className="w-2.5 h-2.5" /> Anomaly
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* Certified Weighbridge Weight */}
+                            <td className="py-2.5 px-3 text-right tabular-nums font-bold text-slate-800">
+                              {(tx.weighbridgeWeightKg || tx.declaredWeightKg || 0).toFixed(1)}
+                            </td>
+
+                            {/* Mandi Rate */}
+                            <td className="py-2.5 px-3 text-right tabular-nums text-slate-700">
+                              ₹{tx.ratePerKg}
+                            </td>
+
+                            {/* Disbursed Amount */}
+                            <td className="py-2.5 px-3 text-right tabular-nums font-bold text-emerald-800">
+                              ₹{(tx.totalAmount || 0).toLocaleString('en-IN')}
+                            </td>
+
+                            {/* Mode & UTR */}
+                            <td className="py-2.5 px-3">
+                              <span className="font-semibold text-slate-800 block text-[11px]">
+                                {tx.paymentMode || 'UPI'}
+                              </span>
+                              <span
+                                className="text-[10px] font-mono text-slate-500 truncate block max-w-[140px]"
+                                title={tx.settlementUtr}
+                              >
+                                {tx.settlementUtr || 'PENDING'}
+                              </span>
+                            </td>
+
+                            {/* Status Badge */}
+                            <td className="py-2.5 px-3">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                  isSettled
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : isFlagged
+                                    ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                    : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                }`}
+                              >
+                                {tx.paymentStatus || 'processing'}
+                              </span>
+                            </td>
+
+                            {/* Actions */}
+                            <td className="py-2.5 px-3 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setInspectingTxn(tx)}
+                                  className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer transition-colors"
+                                  title="Inspect complete CPCB compliance manifest"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedLotForModal({
+                                      lotName: tx.materialName,
+                                      materialId: tx.materialId,
+                                      currentRate: tx.ratePerKg,
+                                      lotId: tx.lotId
+                                    })
+                                  }
+                                  className="p-1 text-emerald-700 hover:text-emerald-900 hover:bg-emerald-50 rounded cursor-pointer transition-colors"
+                                  title="View Mandi Price vs Statutory Floor Graph"
+                                >
+                                  <TrendingUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDeleteModal({ isOpen: true, txn: tx });
+                                    setSecurityKeyInput('');
+                                    setDeleteError(null);
+                                    setDeleteSuccess(null);
+                                  }}
+                                  className="p-1 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded cursor-pointer transition-colors"
+                                  title="Delete record using key 12345678"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* INSPECTION MODAL DRAWER */}
+      {inspectingTxn && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs p-3 sm:p-5 flex items-center justify-center animate-fadeIn"
+          onClick={() => setInspectingTxn(null)}
+        >
+          <div
+            className="bg-white border border-slate-200 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden my-4 text-slate-900 font-mono text-xs"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-emerald-700" />
+                <span className="font-bold text-sm text-slate-900">
+                  CPCB Mandatory Electronic Waste Audit Manifest
+                </span>
               </div>
               <button
                 type="button"
                 onClick={() => setInspectingTxn(null)}
-                className="text-slate-400 hover:text-slate-800 p-2 rounded-lg cursor-pointer"
+                className="text-slate-500 hover:text-slate-900 p-1 rounded cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Body */}
-            <div className="p-5 space-y-4 text-xs font-mono">
-              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+            <div className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
                 <div>
-                  <div className="text-slate-500 uppercase text-[10px]">Settlement UTR</div>
-                  <div className="text-emerald-700 font-bold break-all">{inspectingTxn.settlementUtr}</div>
+                  <span className="text-[10px] text-slate-500 block uppercase">Transaction ID</span>
+                  <span className="font-bold text-slate-900">{inspectingTxn.id}</span>
                 </div>
                 <div>
-                  <div className="text-slate-500 uppercase text-[10px]">Payment Timestamp</div>
-                  <div className="text-slate-800">{inspectingTxn.timestamp}</div>
+                  <span className="text-[10px] text-slate-500 block uppercase">Lot ID</span>
+                  <span className="font-bold text-slate-900">{inspectingTxn.lotId}</span>
                 </div>
                 <div>
-                  <div className="text-slate-500 uppercase text-[10px]">Buyer Facility</div>
-                  <div className="text-slate-900 font-bold">{inspectingTxn.vendorName}</div>
-                  <div className="text-slate-500 text-[10px]">{inspectingTxn.vendorCpcbId}</div>
+                  <span className="text-[10px] text-slate-500 block uppercase">Timestamp</span>
+                  <span className="text-slate-800">{inspectingTxn.timestamp || inspectingTxn.date}</span>
                 </div>
                 <div>
-                  <div className="text-slate-500 uppercase text-[10px]">Seller Collector</div>
-                  <div className="text-slate-900 font-bold">{inspectingTxn.collectorName}</div>
-                  <div className="text-slate-500 text-[10px]">{inspectingTxn.collectorPhone}</div>
+                  <span className="text-[10px] text-slate-500 block uppercase">GPS Geofence</span>
+                  <span className="text-slate-800">{inspectingTxn.gpsCoordinates || '18.5204° N, 73.8567° E'}</span>
                 </div>
               </div>
 
-              {/* Material & Financials */}
-              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">Material Grade:</span>
-                  <span className="font-bold text-slate-900">{inspectingTxn.materialName}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">Verified Weighbridge Mass:</span>
-                  <span className="font-bold text-emerald-700">{inspectingTxn.weighbridgeWeightKg || inspectingTxn.declaredWeightKg} kg</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">CPCB Mandi Unit Rate:</span>
-                  <span className="font-bold text-slate-900">₹{inspectingTxn.ratePerKg} / kg</span>
-                </div>
-                <div className="flex justify-between items-center border-t border-slate-200 pt-2 text-sm">
-                  <span className="text-slate-900 font-bold">Total Direct Payout:</span>
-                  <span className="font-black text-amber-700">₹{inspectingTxn.totalAmount.toLocaleString('en-IN')}</span>
-                </div>
-              </div>
-
-              {inspectingTxn.anomalyFlag && (
-                <div className="bg-rose-50 border border-rose-200 p-3 rounded-xl text-rose-800 text-xs">
-                  <div className="font-bold flex items-center gap-1 text-rose-700 mb-1">
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    Automated Surveillance Alert
+              <div className="space-y-2 border-t border-slate-200 pt-3">
+                <div className="text-[11px] font-bold text-slate-700 uppercase">Parties to Handover</div>
+                <div className="grid grid-cols-2 gap-3 text-slate-800">
+                  <div className="bg-slate-50 p-2.5 rounded border border-slate-200">
+                    <span className="text-[10px] text-slate-500 block uppercase font-bold">Authorized Recycler</span>
+                    <div className="font-bold text-slate-900">{inspectingTxn.vendorName}</div>
+                    <div className="text-[10px] text-slate-500">ID: {inspectingTxn.vendorId}</div>
+                    <div className="text-[10px] text-slate-500">CPCB Reg: {inspectingTxn.vendorCpcbId}</div>
                   </div>
-                  <div>{inspectingTxn.anomalyReason}</div>
+                  <div className="bg-slate-50 p-2.5 rounded border border-slate-200">
+                    <span className="text-[10px] text-slate-500 block uppercase font-bold">Informal Kabadiwala</span>
+                    <div className="font-bold text-slate-900">{inspectingTxn.collectorName}</div>
+                    <div className="text-[10px] text-slate-500">ID: {inspectingTxn.collectorId}</div>
+                    <div className="text-[10px] text-slate-500">Phone: {inspectingTxn.collectorPhone}</div>
+                  </div>
                 </div>
-              )}
-
-              <div className="flex items-center justify-between pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setInspectingTxn(null);
-                    handleOpenPriceModal(inspectingTxn.materialName, inspectingTxn.materialId, inspectingTxn.ratePerKg, inspectingTxn.lotId);
-                  }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center gap-2 cursor-pointer shadow-xs"
-                >
-                  <TrendingUp className="w-3.5 h-3.5" />
-                  <span>Open Price Fluctuation Graph</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInspectingTxn(null)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl cursor-pointer"
-                >
-                  Close
-                </button>
               </div>
+
+              <div className="space-y-2 border-t border-slate-200 pt-3">
+                <div className="text-[11px] font-bold text-slate-700 uppercase">Material & Valuation Metrics</div>
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <div className="bg-slate-50 p-2 rounded border border-slate-200">
+                    <span className="text-[10px] text-slate-500 block uppercase">Weight</span>
+                    <span className="font-bold text-slate-900">
+                      {(inspectingTxn.weighbridgeWeightKg || inspectingTxn.declaredWeightKg || 0).toFixed(1)} kg
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded border border-slate-200">
+                    <span className="text-[10px] text-slate-500 block uppercase">Rate/kg</span>
+                    <span className="font-bold text-slate-900">₹{inspectingTxn.ratePerKg}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded border border-slate-200">
+                    <span className="text-[10px] text-slate-500 block uppercase">Payout</span>
+                    <span className="font-bold text-emerald-800">₹{inspectingTxn.totalAmount?.toLocaleString('en-IN')}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded border border-slate-200">
+                    <span className="text-[10px] text-slate-500 block uppercase">Payment</span>
+                    <span className="font-bold text-indigo-800">{inspectingTxn.paymentMode}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-100 p-3 rounded-lg border border-slate-200 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Settlement UTR:</span>
+                  <span className="font-bold text-slate-900">{inspectingTxn.settlementUtr || 'N/A'}</span>
+                </div>
+                {inspectingTxn.eprCertificateNo && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">EPR Certificate No:</span>
+                    <span className="font-bold text-emerald-800">{inspectingTxn.eprCertificateNo}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedLotForModal({
+                    lotName: inspectingTxn.materialName,
+                    materialId: inspectingTxn.materialId,
+                    currentRate: inspectingTxn.ratePerKg,
+                    lotId: inspectingTxn.lotId
+                  });
+                }}
+                className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded font-bold transition-colors cursor-pointer"
+              >
+                Inspect Price Volatility Chart
+              </button>
+              <button
+                type="button"
+                onClick={() => setInspectingTxn(null)}
+                className="px-3.5 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded font-bold transition-colors cursor-pointer"
+              >
+                Close Manifest
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* LOT PRICE CHANGE GRAPH MODAL (FIXED & DIRECTLY VISIBLE ON SCREEN) */}
+      {/* STATUTORY CLEARANCE KEY DELETE AUTHORIZATION MODAL (Key: 12345678) */}
+      {deleteModal.isOpen && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs p-3 sm:p-5 flex items-center justify-center animate-fadeIn"
+          onClick={() => setDeleteModal({ isOpen: false })}
+        >
+          <div
+            className="bg-white border border-slate-300 rounded-xl w-full max-w-md shadow-2xl p-5 space-y-4 text-slate-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-lg bg-rose-100 border border-rose-300 flex items-center justify-center text-rose-700 shrink-0">
+                <Lock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  {deleteModal.isPurgeAll
+                    ? 'Purge Filtered Records'
+                    : `Delete Record ${deleteModal.txn?.id}`}
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Statutory Clearance Key Authorization Required (Key: <span className="font-mono font-bold text-slate-900">12345678</span>)
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 leading-relaxed font-mono">
+              ⚠️ Records deleted from the active registry will be transferred into the <span className="font-bold">12-Day Safe Custody Recycle Bin</span> under CPCB Rule 14(2) before permanent deletion.
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-mono font-bold text-slate-700 block">
+                Enter Government Clearance Key:
+              </label>
+              <div className="relative">
+                <Key className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  value={securityKeyInput}
+                  onChange={(e) => setSecurityKeyInput(e.target.value)}
+                  placeholder="Enter Clearance Key (12345678)"
+                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono text-slate-900 placeholder:text-slate-400 focus:outline-hidden focus:border-rose-600"
+                  autoFocus
+                />
+              </div>
+              {deleteError && (
+                <div className="text-xs font-mono text-rose-700 font-semibold">{deleteError}</div>
+              )}
+              {deleteSuccess && (
+                <div className="text-xs font-mono text-emerald-700 font-semibold">{deleteSuccess}</div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setDeleteModal({ isOpen: false })}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-mono text-xs font-bold rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAuthorizeDelete}
+                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-mono text-xs font-bold rounded-lg transition-colors cursor-pointer shadow-xs"
+              >
+                Authorize Clearance
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PRICE HISTORY MODAL */}
       {selectedLotForModal && (
         <LotPriceHistoryModal
           isOpen={true}
@@ -1524,101 +1898,6 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
           currentRate={selectedLotForModal.currentRate}
           lotId={selectedLotForModal.lotId}
         />
-      )}
-
-      {/* GOVERNMENT DELETE SECURITY KEY AUTHORIZATION MODAL (KEY: 12345678) */}
-      {deleteModal.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-fadeIn">
-          <div className="bg-white rounded-3xl border border-slate-200 max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-rose-100 border border-rose-200 flex items-center justify-center text-rose-600">
-                  <Trash2 className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 font-mono">
-                    Statutory Data Purge
-                  </h3>
-                  <p className="text-[11px] text-slate-500 font-sans">
-                    Government Central Clearance Protocol
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDeleteModal({ isOpen: false })}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-xs text-rose-900 leading-relaxed font-sans space-y-1">
-              <p className="font-bold flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5 text-rose-600" />
-                Restricted Government Authorization Required
-              </p>
-              <p className="text-[11px] text-rose-800">
-                {deleteModal.isPurgeAll
-                  ? `You are about to purge all currently filtered transaction records (${filteredTransactions.length} items). Enter the 8-digit government statutory key to authorize permanent removal.`
-                  : `You are about to delete record ${deleteModal.txn?.id || 'selected lot'} from official records. Enter the 8-digit government statutory key.`}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-700 font-mono flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-slate-500" />
-                <span>Enter Government Clearance Key:</span>
-              </label>
-              <input
-                type="password"
-                placeholder="Enter 8-digit statutory key (e.g. 12345678)"
-                value={securityKeyInput}
-                onChange={(e) => {
-                  setSecurityKeyInput(e.target.value);
-                  setDeleteError(null);
-                }}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono tracking-widest text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500"
-                autoFocus
-              />
-              <p className="text-[10px] text-slate-400 font-mono">
-                Statutory clearance master key: <code className="bg-slate-100 px-1 py-0.5 rounded text-slate-700 font-bold">12345678</code>
-              </p>
-            </div>
-
-            {deleteError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-mono flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>{deleteError}</span>
-              </div>
-            )}
-
-            {deleteSuccess && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-700 font-mono flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>{deleteSuccess}</span>
-              </div>
-            )}
-
-            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setDeleteModal({ isOpen: false })}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold font-mono transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleAuthorizeDelete}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold font-mono transition-colors cursor-pointer shadow-xs flex items-center gap-1.5"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Authorize & Delete</span>
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
