@@ -2,9 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { EWasteLot, MaterialItem } from '../types';
 import { playFeedbackChime } from '../utils/speech';
-import { parseDateTimeToMs, getSearchableDateString } from '../utils/dateTime';
 import { TablePagination } from './TablePagination';
-import { AuthorityQrScannerModal } from './AuthorityQrScannerModal';
 import { 
   Factory, 
   ShieldCheck, 
@@ -56,8 +54,7 @@ export const RecyclerErpDashboard: React.FC = () => {
     reopenLot, 
     updateMaterialPrice, 
     setCurrentView, 
-    speak,
-    setActivePublicOrderId
+    speak 
   } = useApp();
 
   // Active ERP Tab (Economics, Datasets, Research moved strictly to Government Portal)
@@ -130,7 +127,6 @@ export const RecyclerErpDashboard: React.FC = () => {
   const [verifyingLot, setVerifyingLot] = useState<EWasteLot | null>(null);
   const [weighbridgeInput, setWeighbridgeInput] = useState<number>(0);
   const [selectedPaymentMode, setSelectedPaymentMode] = useState<'UPI' | 'CASH'>('UPI');
-  const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
   
   // Tab 1: Pending vs Paid Tab State
   const [inboundTab, setInboundTab] = useState<'pending' | 'paid'>('pending');
@@ -197,16 +193,10 @@ export const RecyclerErpDashboard: React.FC = () => {
     goldGrams: number;
   } | null>(null);
 
-  const pendingLots = lots.filter((l) => l.status === 'pending' && !l.paidAt && !l.settlementUtr);
+  const pendingLots = lots.filter((l) => l.status === 'pending');
   const flaggedAnomalyLots = lots.filter((l) => l.status !== 'rejected' && (l.anomalyFlag || l.ratePerKg > 900 || (l.category === 'pcb' && l.weightKg > 50)));
   const rejectedLots = lots.filter((l) => l.status === 'rejected');
-  const verifiedLots = lots.filter((l) => 
-    l.status === 'paid' || 
-    l.status === 'verified' || 
-    l.status === 'settled' || 
-    Boolean(l.paidAt) || 
-    Boolean(l.settlementUtr)
-  );
+  const verifiedLots = lots.filter((l) => l.status === 'paid' || l.status === 'verified');
 
   // Tally Recovered CRM Elements
   const totalProcessedKg = verifiedLots.reduce((acc, l) => acc + (l.weighbridgeWeightKg || l.weightKg), 0);
@@ -221,19 +211,16 @@ export const RecyclerErpDashboard: React.FC = () => {
   // 1. Pending Queue Table Filtering, Sorting & Pagination
   const filteredPendingLots = useMemo(() => {
     return pendingLots.filter((lot) => {
-      const dateStr = getSearchableDateString(lot.timestamp || lot.createdAt).toLowerCase();
       const matchSearch = pendingSearch === '' || 
         lot.id.toLowerCase().includes(pendingSearch.toLowerCase()) ||
         lot.collectorName.toLowerCase().includes(pendingSearch.toLowerCase()) ||
         lot.collectorId.toLowerCase().includes(pendingSearch.toLowerCase()) ||
-        lot.materialName.toLowerCase().includes(pendingSearch.toLowerCase()) ||
-        (lot.facilityName && lot.facilityName.toLowerCase().includes(pendingSearch.toLowerCase())) ||
-        dateStr.includes(pendingSearch.toLowerCase());
+        lot.materialName.toLowerCase().includes(pendingSearch.toLowerCase());
       const matchCat = pendingCategory === 'ALL' || lot.category.toLowerCase() === pendingCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (pendingSort === 'date_desc') return parseDateTimeToMs(b.timestamp || b.createdAt) - parseDateTimeToMs(a.timestamp || a.createdAt);
-      if (pendingSort === 'date_asc') return parseDateTimeToMs(a.timestamp || a.createdAt) - parseDateTimeToMs(b.timestamp || b.createdAt);
+      if (pendingSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      if (pendingSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
       if (pendingSort === 'mass_desc') return b.weightKg - a.weightKg;
       if (pendingSort === 'mass_asc') return a.weightKg - b.weightKg;
       if (pendingSort === 'rate_desc') return b.ratePerKg - a.ratePerKg;
@@ -251,32 +238,17 @@ export const RecyclerErpDashboard: React.FC = () => {
   // 2. Verified & Paid Table Filtering, Sorting & Pagination
   const filteredPaidLots = useMemo(() => {
     return verifiedLots.filter((lot) => {
-      const effectiveDate = lot.paidAt || lot.paidTimestamp || lot.timestamp || lot.createdAt;
-      const dateStr = getSearchableDateString(effectiveDate).toLowerCase();
       const matchSearch = paidSearch === '' ||
         lot.id.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.collectorName.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.collectorId.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.materialName.toLowerCase().includes(paidSearch.toLowerCase()) ||
-        (lot.facilityName && lot.facilityName.toLowerCase().includes(paidSearch.toLowerCase())) ||
-        (lot.settlementUtr && lot.settlementUtr.toLowerCase().includes(paidSearch.toLowerCase())) ||
-        dateStr.includes(paidSearch.toLowerCase()) ||
-        (lot.paymentMode && lot.paymentMode.toLowerCase().includes(paidSearch.toLowerCase())) ||
-        (paidSearch.toLowerCase().includes('paid') && (lot.status === 'paid' || Boolean(lot.paidAt))) ||
-        (paidSearch.toLowerCase().includes('verif') && (lot.status === 'paid' || lot.status === 'verified'));
+        (lot.paymentMode && lot.paymentMode.toLowerCase().includes(paidSearch.toLowerCase()));
       const matchCat = paidCategory === 'ALL' || lot.category.toLowerCase() === paidCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (paidSort === 'date_desc') {
-        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.createdAt) || parseDateTimeToMs(a.timestamp);
-        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.createdAt) || parseDateTimeToMs(b.timestamp);
-        return timeB - timeA;
-      }
-      if (paidSort === 'date_asc') {
-        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.createdAt) || parseDateTimeToMs(a.timestamp);
-        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.createdAt) || parseDateTimeToMs(b.timestamp);
-        return timeA - timeB;
-      }
+      if (paidSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      if (paidSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (paidSort === 'mass_desc') return massB - massA;
@@ -379,8 +351,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = selectedVendorCategory === 'ALL' || lot.category.toLowerCase() === selectedVendorCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (selectedVendorSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
-      if (selectedVendorSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
+      if (selectedVendorSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      if (selectedVendorSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (selectedVendorSort === 'mass_desc') return massB - massA;
@@ -415,8 +387,8 @@ export const RecyclerErpDashboard: React.FC = () => {
         const scoreB = liveAnomalyResults[b.id]?.anomalyScore ?? (b.anomalyFlag ? 88 : 60);
         return scoreB - scoreA;
       }
-      if (anomalySort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
-      if (anomalySort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
+      if (anomalySort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      if (anomalySort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
       if (anomalySort === 'mass_desc') return b.weightKg - a.weightKg;
       if (anomalySort === 'amount_desc') return b.totalAmount - a.totalAmount;
       return 0;
@@ -441,8 +413,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = rejectedCategory === 'ALL' || lot.category.toLowerCase() === rejectedCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (rejectedSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
-      if (rejectedSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
+      if (rejectedSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      if (rejectedSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
       if (rejectedSort === 'mass_desc') return b.weightKg - a.weightKg;
       if (rejectedSort === 'amount_desc') return b.totalAmount - a.totalAmount;
       return 0;
@@ -465,7 +437,7 @@ export const RecyclerErpDashboard: React.FC = () => {
         lot.category.toLowerCase().includes(q) ||
         lot.materialName.toLowerCase().includes(q);
     }).sort((a, b) => {
-      if (eprSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (eprSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (eprSort === 'mass_desc') return massB - massA;
@@ -560,20 +532,6 @@ export const RecyclerErpDashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* Quick Inbound Manifest QR Scanner */}
-            <button
-              type="button"
-              onClick={() => {
-                playFeedbackChime('beep');
-                setIsQrScannerOpen(true);
-              }}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
-              title="Scan Vendor QR Pass via Live Camera or Device Gallery"
-            >
-              <QrCode className="w-3.5 h-3.5" />
-              <span>Scan QR Pass</span>
-            </button>
-
             {/* Restricted Tools Moved to Government Portal; Direct link provided */}
             <button
               type="button"
@@ -662,19 +620,7 @@ export const RecyclerErpDashboard: React.FC = () => {
                   Real-time queue of traceable lots arriving from registered informal collectors. Verify mass against digital declaration.
                 </p>
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => {
-                    playFeedbackChime('beep');
-                    setIsQrScannerOpen(true);
-                  }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center gap-2 transition-all shadow-sm cursor-pointer"
-                  title="Scan Inbound Scrap Manifest QR Code via Camera or Gallery"
-                >
-                  <QrCode className="w-4 h-4" />
-                  <span>Scan QR Code (Camera / Gallery)</span>
-                </button>
+              <div className="flex items-center gap-2">
                 <span className="text-xs font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
                   Live Sensor Stream Active
@@ -996,77 +942,140 @@ export const RecyclerErpDashboard: React.FC = () => {
                   <span>Collector Partners & KYC</span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Select any registered collector partner below to view their dedicated audit dossier, weighbridge deposits, and disbursements.
+                  Manage registered last-mile informal collector partners. Select any vendor folder below to audit their specific paid or pending deposits.
                 </p>
               </div>
 
-              {/* Vendor Action Buttons */}
-              <div className="flex items-center gap-2 w-full sm:w-auto">
+              {/* Vendor List Controls */}
+              <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
                 <button
                   type="button"
                   onClick={() => setIsAddVendorOpen(true)}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>+ Register Partner / Vendor</span>
                 </button>
+
+                <div className="relative flex-1 sm:w-56">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search vendor name, ID..."
+                    value={vendorSearch}
+                    onChange={(e) => {
+                      setVendorSearch(e.target.value);
+                      setVendorPage(1);
+                    }}
+                    className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-600">
+                  <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                  <select
+                    value={vendorSort}
+                    onChange={(e) => {
+                      setVendorSort(e.target.value as typeof vendorSort);
+                      setVendorPage(1);
+                    }}
+                    aria-label="Sort vendor partners"
+                    className="bg-transparent font-medium text-slate-700 text-xs focus:outline-none cursor-pointer"
+                  >
+                    <option value="mass_desc">Deposited Mass: High → Low</option>
+                    <option value="mass_asc">Deposited Mass: Low → High</option>
+                    <option value="lots_desc">Total Lots: High → Low</option>
+                    <option value="name_asc">Partner Name (A-Z)</option>
+                  </select>
+                </div>
               </div>
             </div>
 
-            {/* NEAT SEARCH DROPDOWN FOR PARTNERS (Replacing Long Table) */}
-            <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs">
-              <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
-                
-                {/* Search & Select Combobox */}
-                <div className="flex-1">
-                  <label className="block text-xs font-bold text-slate-700 font-mono mb-1.5 flex items-center gap-1.5">
-                    <Search className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>Search & Select Collector Partner Folder:</span>
-                  </label>
-                  <div className="relative">
-                    <select
-                      value={selectedVendorId}
-                      onChange={(e) => {
-                        setSelectedVendorId(e.target.value);
-                        setSelectedVendorPage(1);
-                        playFeedbackChime('beep');
-                      }}
-                      className="w-full px-4 py-2.5 bg-slate-50 border-2 border-indigo-200 hover:border-indigo-400 focus:border-indigo-600 rounded-2xl text-xs font-bold text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer shadow-2xs"
-                    >
-                      {uniqueCollectors.map((vendor) => (
-                        <option key={vendor.id} value={vendor.id}>
-                          👤 {vendor.name} ({vendor.id}) — {vendor.totalLots} Lots • {vendor.totalMass.toFixed(1)} kg • ₹{vendor.totalPaid.toLocaleString('en-IN')}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Quick Partner Pills */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 pt-1 md:pt-5">
-                  <span className="text-[11px] font-mono text-slate-400">Quick Select:</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {uniqueCollectors.slice(0, 4).map((v) => (
-                      <button
-                        key={v.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedVendorId(v.id);
-                          setSelectedVendorPage(1);
-                          playFeedbackChime('beep');
-                        }}
-                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold font-mono transition-all cursor-pointer ${
-                          selectedVendorId === v.id
-                            ? 'bg-indigo-600 text-white shadow-2xs'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
-                        }`}
-                      >
-                        {v.name.split(' ')[0]} ({v.totalLots})
-                      </button>
-                    ))}
-                  </div>
-                </div>
+            {/* Registered Partners Table (10 per page) */}
+            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-500 font-mono uppercase tracking-wider border-b border-slate-200">
+                    <tr>
+                      <th className="py-3 px-4">Partner Profile & ID</th>
+                      <th className="py-3 px-4">Safety Tier</th>
+                      <th className="py-3 px-4">Total Lots</th>
+                      <th className="py-3 px-4">Total E-Waste Deposited</th>
+                      <th className="py-3 px-4">Total Payouts Released</th>
+                      <th className="py-3 px-4 text-right">Folder Access</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-sans">
+                    {paginatedVendors.length === 0 ? (
+                      <tr><td colSpan={6} className="py-8 text-center text-slate-500 font-sans">No vendor partners matching search query.</td></tr>
+                    ) : paginatedVendors.map((vendor) => {
+                      const isSelected = selectedVendorId === vendor.id;
+                      return (
+                        <tr 
+                          key={vendor.id} 
+                          onClick={() => {
+                            setSelectedVendorId(vendor.id);
+                            setSelectedVendorPage(1);
+                          }}
+                          className={`transition-colors cursor-pointer ${isSelected ? 'bg-indigo-50/90 border-l-4 border-indigo-600' : 'hover:bg-slate-50'}`}
+                        >
+                          <td className="py-3.5 px-4 flex items-center gap-3">
+                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold overflow-hidden shrink-0 ${isSelected ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-800 border border-indigo-200'}`}>
+                              {vendor.id === 'KBD-MH-4402' ? (
+                                <img src="https://images.unsplash.com/photo-1544717305-2782549b5136?w=200&auto=format&fit=crop&q=80" alt="Avatar" className="w-full h-full object-cover" />
+                              ) : (
+                                <User className="w-4 h-4" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="font-bold text-slate-900 text-xs flex items-center gap-1">
+                                {vendor.name}
+                                {vendor.id === 'KBD-MH-4402' && <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" title="KYC Verified" />}
+                              </div>
+                              <div className="text-[10px] text-slate-500 font-mono mt-0.5">{vendor.id} • {vendor.phone}</div>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${vendor.id === 'KBD-MH-4402' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                              {vendor.id === 'KBD-MH-4402' ? 'Gold Partner' : 'Standard Partner'}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 font-mono font-bold text-slate-700">
+                            {vendor.totalLots} Lots
+                          </td>
+                          <td className="py-3.5 px-4 font-mono font-bold text-indigo-900">
+                            {vendor.totalMass.toFixed(1)} kg
+                          </td>
+                          <td className="py-3.5 px-4 font-mono font-bold text-emerald-700">
+                            ₹{vendor.totalPaid.toLocaleString('en-IN')}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedVendorId(vendor.id);
+                                setSelectedVendorPage(1);
+                              }}
+                              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors ${isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                            >
+                              {isSelected ? 'Open Folder ✓' : 'View Folder'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
+
+              <TablePagination
+                currentPage={vendorPage}
+                totalPages={vendorTotalPages}
+                totalItems={filteredVendors.length}
+                pageSize={PAGE_SIZE}
+                onPageChange={setVendorPage}
+              />
             </div>
             
             {/* SELECTED VENDOR DEDICATED FOLDER & AUDIT LEDGER */}
@@ -2743,16 +2752,6 @@ export const RecyclerErpDashboard: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* AUTHORITY INBOUND QR SCANNER MODAL (CAMERA + GALLERY + LOT ID) */}
-      <AuthorityQrScannerModal
-        isOpen={isQrScannerOpen}
-        onClose={() => setIsQrScannerOpen(false)}
-        onLotSelected={(selectedLot) => {
-          setIsQrScannerOpen(false);
-          setActivePublicOrderId(selectedLot.id);
-        }}
-      />
 
     </div>
   );

@@ -2,12 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { EWasteLot, CollectorProfile } from '../types';
 import { TablePagination } from './TablePagination';
 import { DigitalStampOverlay } from './DigitalStampOverlay';
-import { LotPriceHistoryModal } from './LotPriceHistoryModal';
 import { QRCodeSVG } from 'qrcode.react';
 import { playFeedbackChime } from '../utils/speech';
-import { parseDateTimeToMs } from '../utils/dateTime';
-import { getLiveTrackingUrl, VERCEL_BASE_URL } from '../utils/trackingUrl';
-import { useApp } from '../context/AppContext';
 import { 
   Package, 
   Clock, 
@@ -29,8 +25,7 @@ import {
   Printer,
   ChevronRight,
   ShieldCheck,
-  Tag,
-  TrendingUp
+  Tag
 } from 'lucide-react';
 
 interface CollectorOrdersManagementProps {
@@ -48,8 +43,6 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
   onOpenQrPass,
   onNavigateToScan
 }) => {
-  const { setActivePublicOrderId } = useApp();
-
   // Folder sub-tab: 'pending' | 'completed' | 'quarantined'
   const [activeFolder, setActiveFolder] = useState<'pending' | 'completed' | 'quarantined'>('pending');
 
@@ -108,12 +101,8 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
         return matchesCategory && matchesSearch;
       })
       .sort((a, b) => {
-        if (sortBy === 'date_desc') {
-          return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
-        }
-        if (sortBy === 'date_asc') {
-          return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
-        }
+        if (sortBy === 'date_desc') return b.id.localeCompare(a.id);
+        if (sortBy === 'date_asc') return a.id.localeCompare(b.id);
         if (sortBy === 'mass_desc') return (b.weighbridgeWeightKg || b.weightKg) - (a.weighbridgeWeightKg || a.weightKg);
         if (sortBy === 'amount_desc') return (b.finalPayoutAmount || b.totalAmount) - (a.finalPayoutAmount || a.totalAmount);
         return 0;
@@ -479,25 +468,12 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                             <span>{declaredWeight} kg</span>
                           )}
                         </div>
-                        {lot.isOutOfCategory || lot.isPendingCategoryApproval ? (
-                          <>
-                            <div className="text-[10px] text-amber-700 font-semibold">
-                              Rate: CPCB TBD
-                            </div>
-                            <div className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded mt-0.5 inline-block">
-                              Price will be decided later
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="text-[10px] text-slate-500">
-                              ₹{lot.ratePerKg}/kg
-                            </div>
-                            <div className="text-xs font-extrabold text-emerald-700 mt-0.5">
-                              ₹{lotAmount.toLocaleString('en-IN')}
-                            </div>
-                          </>
-                        )}
+                        <div className="text-[10px] text-slate-500">
+                          ₹{lot.ratePerKg}/kg
+                        </div>
+                        <div className="text-xs font-extrabold text-emerald-700 mt-0.5">
+                          ₹{lotAmount.toLocaleString('en-IN')}
+                        </div>
                       </td>
 
                       {/* Column 4: Facility & Status */}
@@ -511,12 +487,7 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
 
                         {/* Status Badge */}
                         <div className="mt-1 flex flex-col gap-1">
-                          {lot.isOutOfCategory || lot.isPendingCategoryApproval ? (
-                            <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-400">
-                              <Clock className="w-2.5 h-2.5 text-amber-700 animate-pulse" />
-                              <span>CPCB Category Approval Pending</span>
-                            </span>
-                          ) : lot.needsOnlineAiCategorization ? (
+                          {lot.needsOnlineAiCategorization ? (
                             <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-800 border border-cyan-300">
                               <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-ping"></span>
                               <span>Pending AI Classification</span>
@@ -777,7 +748,12 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-4">
               <div className="w-44 h-44 bg-white p-2 rounded-xl flex flex-col items-center justify-center relative border border-slate-200">
                 <QRCodeSVG
-                  value={getLiveTrackingUrl(viewingQrLot.id)}
+                  value={JSON.stringify({
+                    lotId: viewingQrLot.id,
+                    collectorId: collector.id,
+                    material: viewingQrLot.materialName,
+                    weight: viewingQrLot.weightKg
+                  })}
                   size={160}
                   level={"H"}
                   includeMargin={false}
@@ -789,27 +765,16 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                   </div>
                 </div>
               </div>
-              <p className="text-[10px] text-emerald-800 font-mono font-bold mt-2">
-                {VERCEL_BASE_URL}
-              </p>
             </div>
 
             <div className="bg-slate-50 rounded-2xl p-3 text-left border border-slate-200 text-xs space-y-1.5 font-mono mb-4">
               <div className="flex justify-between">
                 <span className="text-slate-500">Weight & Rate:</span>
-                <span className="text-slate-900 font-bold">
-                  {viewingQrLot.isOutOfCategory || viewingQrLot.isPendingCategoryApproval
-                    ? `${viewingQrLot.weightKg} kg (CPCB Tariff Pending)`
-                    : `${viewingQrLot.weightKg} kg @ ₹${viewingQrLot.ratePerKg}/kg`}
-                </span>
+                <span className="text-slate-900 font-bold">{viewingQrLot.weightKg} kg @ ₹{viewingQrLot.ratePerKg}/kg</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Declared Valuation:</span>
-                <span className="text-amber-800 font-extrabold">
-                  {viewingQrLot.isOutOfCategory || viewingQrLot.isPendingCategoryApproval
-                    ? 'Price will be decided later'
-                    : `₹${viewingQrLot.totalAmount}`}
-                </span>
+                <span className="text-emerald-700 font-extrabold">₹{viewingQrLot.totalAmount}</span>
               </div>
               <div className="flex justify-between border-t border-slate-200 pt-1">
                 <span className="text-slate-500">Destination:</span>
@@ -817,26 +782,13 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
               </div>
             </div>
 
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => {
-                  const targetId = viewingQrLot.id;
-                  setViewingQrLot(null);
-                  setActivePublicOrderId(targetId);
-                }}
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <span>View Live Order Status Page ↗</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewingQrLot(null)}
-                className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs cursor-pointer"
-              >
-                Close Pass
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setViewingQrLot(null)}
+              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs text-xs"
+            >
+              Close Pass
+            </button>
           </div>
         </div>
       )}

@@ -1,6 +1,6 @@
 export type Language = 'hi' | 'mr' | 'en';
 
-export type UserRole = 'gateway' | 'collector' | 'recycler' | 'government' | 'order_tracking';
+export type UserRole = 'gateway' | 'collector' | 'recycler' | 'government';
 
 export interface MaterialItem {
   id: string;
@@ -10,7 +10,7 @@ export interface MaterialItem {
   grade: string;
   pricePerKg: number;
   trend: number; // percentage change e.g. +2.1
-  category: 'pcb' | 'copper' | 'battery' | 'crt' | 'lcd' | 'magnet' | 'plastic' | 'mixed' | string;
+  category: 'pcb' | 'copper' | 'battery' | 'crt' | 'magnet' | 'plastic' | string;
   hazardLevel: 'safe' | 'medium' | 'high';
   hazardWarning_hi?: string;
   hazardWarning_mr?: string;
@@ -28,37 +28,6 @@ export interface MaterialItem {
     neodymiumPct: number;
     goldGramsPerTon: number;
   };
-}
-
-export interface CategoryApprovalRequest {
-  id: string;
-  categoryName: string;
-  categoryName_hi?: string;
-  categoryName_mr?: string;
-  materialName?: string;
-  category?: string;
-  requestedByCollectorId?: string;
-  requestedByCollectorName?: string;
-  collectorId?: string;
-  collectorName?: string;
-  collectorPhone?: string;
-  location?: string;
-  timestamp: string;
-  photoUrl?: string;
-  samplePhotoUrl?: string;
-  estimatedWeightKg?: number;
-  weightKg?: number;
-  suggestedRatePerKg?: number;
-  description?: string;
-  notes?: string;
-  lotId?: string;
-  status: 'pending' | 'approved' | 'rejected';
-  reviewedBy?: string;
-  reviewNotes?: string;
-  approvedRatePerKg?: number;
-  assignedStandardCategory?: string;
-  rejectionReason?: string;
-  reviewDate?: string;
 }
 
 export interface EWasteLot {
@@ -93,29 +62,9 @@ export interface EWasteLot {
   anomalyReason?: string;
   isOfflineCreated?: boolean;
   needsOnlineAiCategorization?: boolean;
-  isOutOfCategory?: boolean;
-  isPendingCategoryApproval?: boolean;
-  requestedCategoryName?: string;
   weighbridgeWeightKg?: number;
   finalPayoutAmount?: number;
   eprCreditKg?: number;
-  paidAt?: string;
-  paidTimestamp?: number;
-  settlementUtr?: string;
-  createdAt?: string;
-  anomalyCleared?: boolean;
-  anomalyResolution?: 'SUPERVISOR_OVERRIDE' | 'REJECTED' | 'CLEARED';
-  anomalyResolvedBy?: string;
-  reopened?: boolean;
-  reopenedAt?: string;
-  reopenedBy?: string;
-  crmYield?: {
-    copperPct: number;
-    lithiumPct: number;
-    cobaltPct: number;
-    neodymiumPct: number;
-    goldGramsPerTon: number;
-  };
 }
 
 export interface CollectorProfile {
@@ -133,9 +82,6 @@ export interface CollectorProfile {
   todayEarnings: number;
   todayWeightKg: number;
   totalLotsCount: number;
-  walletBalance?: number;
-  totalKgCollected?: number;
-  rating?: number;
 }
 
 export interface RecyclerFacility {
@@ -143,176 +89,9 @@ export interface RecyclerFacility {
   name: string;
   cpcbId: string;
   statePcb: string;
-  authorityId?: string;
   location: string;
-  city?: string;
-  state?: string;
   monthlyQuotaTons: number;
   processedThisMonthTons: number;
   activeCollectors: number;
   eprCreditsGeneratedTons: number;
-  contactEmail?: string;
-  contactPhone?: string;
-  complianceRating?: 'A+' | 'A' | 'B' | 'Non-Compliant';
 }
-
-export interface RegulatoryAuthority {
-  id: string;
-  code: string;
-  name: string;
-  fullName: string;
-  state: string;
-  zone: 'North' | 'West' | 'South' | 'East' | 'Central' | 'National';
-  headquarters: string;
-  nodalOfficer: string;
-  activeVendorsCount: number;
-  activeCollectorsCount: number;
-  totalTradedTons: number;
-  totalDisbursedCrores: number;
-  complianceScore: number;
-  status: 'Operational' | 'Audit Underway' | 'High Vigilance';
-}
-
-export interface TransactionRecord {
-  id: string;
-  lotId: string;
-  settlementUtr: string;
-  date: string;
-  timestamp: string;
-  vendorId: string;
-  vendorName: string;
-  vendorCpcbId: string;
-  authorityId: string;
-  statePcb: string;
-  collectorId: string;
-  collectorName: string;
-  collectorPhone: string;
-  collectorWard: string;
-  collectorTier: 'Gold' | 'Silver' | 'Bronze';
-  materialId: string;
-  materialName: string;
-  category: string;
-  declaredWeightKg: number;
-  weighbridgeWeightKg: number;
-  ratePerKg: number;
-  totalAmount: number;
-  paymentMode: 'UPI' | 'NEFT' | 'CASH' | 'ESCROW';
-  paymentStatus: 'settled' | 'processing' | 'flagged' | 'rejected';
-  anomalyFlag?: boolean;
-  anomalyReason?: string;
-  eprCreditGeneratedKg: number;
-  eprCertificateNo?: string;
-  gpsCoordinates: string;
-  photoUrl?: string;
-}
-
-export interface LotPricePoint {
-  date: string;
-  cpcbRate: number;
-  marketSpotRate: number;
-  lmeEquivRate: number;
-  volumeKg: number;
-  high: number;
-  low: number;
-  changePct: number;
-}
-
-export interface MaterialPriceTrend {
-  materialId: string;
-  materialName: string;
-  materialName_hi?: string;
-  category: string;
-  currentRate: number;
-  cpcbFloorRate: number;
-  trend30dPct: number;
-  high30d: number;
-  low30d: number;
-  volatilityIndex: number;
-  forecastNextMonth: string;
-  forecastChangePct: number;
-  crmComposition: {
-    copperPct: number;
-    lithiumPct: number;
-    cobaltPct: number;
-    neodymiumPct: number;
-    goldGramsPerTon: number;
-  };
-  history7d: LotPricePoint[];
-  history30d: LotPricePoint[];
-  history90d: LotPricePoint[];
-  history1y: LotPricePoint[];
-}
-
-export interface HelpDeskMessage {
-  id: string;
-  senderRole: 'collector' | 'recycler' | 'government' | 'bot' | 'agent';
-  senderName: string;
-  text: string;
-  timestamp: string;
-}
-
-export interface HelpDeskTicket {
-  id: string;
-  title: string;
-  category: 'rates' | 'settlement' | 'compliance' | 'weighbridge' | 'hazardous' | 'other';
-  portalType: 'collector' | 'recycler' | 'government';
-  userName: string;
-  userPhone?: string;
-  userId: string;
-  status: 'open' | 'agent_assigned' | 'resolved';
-  assignedAgentName?: string;
-  createdAt: string;
-  updatedAt: string;
-  messages: HelpDeskMessage[];
-}
-
-export interface PartnerRegistration {
-  id: string;
-  name: string;
-  phone: string;
-  city: string;
-  state: string;
-  ward: string;
-  bankUpi: string;
-  tier: 'Standard Partner' | 'Silver Partner' | 'Gold Partner';
-  aadhaarOrGst?: string;
-  facilityName?: string;
-  appliedDate: string;
-  status: 'PENDING_GOVT_APPROVAL' | 'APPROVED' | 'REJECTED';
-  approvedBy?: string;
-  approvedDate?: string;
-  rejectionReason?: string;
-  assignedCpcbPartnerId?: string;
-  registeredByAuthorityId: string;
-  companyName?: string;
-  spcbLicenseNo?: string;
-  statePcb?: string;
-  facilityAddress?: string;
-  applicantName?: string;
-  contactPhone?: string;
-  contactEmail?: string;
-  partnerType?: 'RECYCLER_FACILITY' | 'AGGREGATOR_HUB';
-  annualCapacityMetricTons?: number;
-  categoriesHandled?: string[];
-  entityType?: string;
-  organizationName?: string;
-  contactPerson?: string;
-}
-
-export interface SqliteEngineStatus {
-  engine: string;
-  version: string;
-  dbFilePath: string;
-  fileSizeBytes: number;
-  fileSizeKb: string;
-  integrity: string;
-  tables: string[];
-  totalLots: number;
-  paidLots: number;
-  pendingLots: number;
-  materialsCount: number;
-  categoryRequestsCount: number;
-  partnersCount: number;
-  lastSyncedAt: string;
-}
-
