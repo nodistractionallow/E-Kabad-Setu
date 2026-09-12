@@ -97,6 +97,9 @@ export interface EWasteLot {
   weighbridgeWeightKg?: number;
   finalPayoutAmount?: number;
   eprCreditKg?: number;
+  paidAt?: string;
+  paidTimestamp?: number;
+  settlementUtr?: string;
   createdAt?: string;
   anomalyCleared?: boolean;
   anomalyResolution?: 'SUPERVISOR_OVERRIDE' | 'REJECTED' | 'CLEARED';

@@ -6,7 +6,7 @@ import { LotPriceHistoryModal } from './LotPriceHistoryModal';
 import { QRCodeSVG } from 'qrcode.react';
 import { playFeedbackChime } from '../utils/speech';
 import { parseDateTimeToMs } from '../utils/dateTime';
-import { getLiveTrackingUrl } from '../utils/trackingUrl';
+import { getLiveTrackingUrl, VERCEL_BASE_URL } from '../utils/trackingUrl';
 import { useApp } from '../context/AppContext';
 import { 
   Package, 
@@ -790,7 +790,7 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                 </div>
               </div>
               <p className="text-[10px] text-emerald-800 font-mono font-bold mt-2">
-                https://e-kabad-setu.vercel.app
+                {VERCEL_BASE_URL}
               </p>
             </div>
 

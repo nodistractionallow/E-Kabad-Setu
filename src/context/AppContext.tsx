@@ -412,26 +412,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const approveAndPayLot = async (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH'): Promise<void> => {
     let updatedLot: EWasteLot | undefined;
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const utr = `UTR-CPCB-${nowMs.toString().slice(-8)}`;
 
-    setLots((prev) =>
-      prev.map((lot) => {
-        if (lot.id === lotId) {
-          const finalPayout = Math.round(weighbridgeWeightKg * lot.ratePerKg);
-          updatedLot = {
-            ...lot,
-            status: 'paid',
-            weighbridgeWeightKg,
-            finalPayoutAmount: finalPayout,
-            paymentMode,
-            eprCreditKg: weighbridgeWeightKg
-          };
-          return updatedLot;
-        }
-        return lot;
-      })
-    );
+    const existingLot = lots.find((l) => l.id.toUpperCase() === lotId.toUpperCase());
+    const finalRate = existingLot ? existingLot.ratePerKg : 480;
+    const finalPayout = Math.round(weighbridgeWeightKg * finalRate);
 
-    const matchedLot = lots.find((l) => l.id === lotId);
+    setLots((prev) => {
+      const idx = prev.findIndex((l) => l.id.toUpperCase() === lotId.toUpperCase());
+      if (idx >= 0) {
+        const target = prev[idx];
+        const updated: EWasteLot = {
+          ...target,
+          status: 'paid',
+          weighbridgeWeightKg,
+          finalPayoutAmount: Math.round(weighbridgeWeightKg * target.ratePerKg),
+          paymentMode,
+          eprCreditKg: weighbridgeWeightKg,
+          paidAt: nowIso,
+          paidTimestamp: nowMs,
+          settlementUtr: utr
+        };
+        updatedLot = updated;
+        const copy = [...prev];
+        copy[idx] = updated;
+        return copy;
+      } else {
+        const newPaidLot: EWasteLot = {
+          ...(existingLot || {
+            id: lotId,
+            collectorId: 'KBD-MH-4402',
+            collectorName: 'Ram Sevak (रामसेवक कांबळे)',
+            collectorPhone: '+91 98234 56789',
+            materialId: 'mat_pcb_high',
+            materialName: 'High-Grade Server & Telecom Motherboard',
+            category: 'pcb',
+            weightKg: weighbridgeWeightKg,
+            ratePerKg: finalRate,
+            totalAmount: finalPayout,
+            timestamp: nowIso,
+            gpsLocation: '18.5204° N, 73.8567° E (Ward 12, Pune)',
+            facilityId: 'REC-MH-PN-004',
+            facilityName: 'EcoMetals CPCB Authorized Dismantling Unit #4',
+            distanceKm: 3.8,
+            hazardFlag: false,
+            photoUrl: 'https://images.unsplash.com/photo-1597733336794-12d05021d510?w=400&auto=format&fit=crop&q=80'
+          }),
+          id: lotId,
+          status: 'paid',
+          weighbridgeWeightKg,
+          finalPayoutAmount: finalPayout,
+          paymentMode,
+          eprCreditKg: weighbridgeWeightKg,
+          paidAt: nowIso,
+          paidTimestamp: nowMs,
+          settlementUtr: utr
+        };
+        updatedLot = newPaidLot;
+        return [newPaidLot, ...prev];
+      }
+    });
+
+    const matchedLot = existingLot || updatedLot;
     let updatedCollector = collector;
     if (matchedLot && matchedLot.collectorId === collector.id) {
       const payout = Math.round(weighbridgeWeightKg * matchedLot.ratePerKg);
@@ -442,23 +486,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCollector(updatedCollector);
     }
 
-    // Persist to Firebase Firestore
+    // Persist to Firebase Firestore with merge
     try {
       if (updatedLot) {
         const lotRef = doc(db, 'lots', lotId);
-        await updateDoc(lotRef, {
-          status: 'paid',
-          weighbridgeWeightKg,
-          finalPayoutAmount: Math.round(weighbridgeWeightKg * updatedLot.ratePerKg),
-          paymentMode,
-          eprCreditKg: weighbridgeWeightKg
-        });
+        await setDoc(lotRef, updatedLot, { merge: true });
       }
       if (matchedLot && matchedLot.collectorId === collector.id) {
         const collectorRef = doc(db, 'collectors', collector.id);
-        await updateDoc(collectorRef, {
+        await setDoc(collectorRef, {
           todayEarnings: updatedCollector.todayEarnings
-        });
+        }, { merge: true });
       }
     } catch (err) {
       console.warn('Firestore update error, cached locally:', err);
@@ -468,15 +506,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const rejectLot = async (lotId: string, reason: string): Promise<void> => {
+    let updatedRejectedLot: EWasteLot | undefined;
     setLots((prev) =>
       prev.map((lot) => {
         if (lot.id === lotId) {
-          return {
+          updatedRejectedLot = {
             ...lot,
             status: 'rejected',
             anomalyFlag: true,
             anomalyReason: reason
           };
+          return updatedRejectedLot;
         }
         return lot;
       })
@@ -484,11 +524,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const lotRef = doc(db, 'lots', lotId);
-      await updateDoc(lotRef, {
-        status: 'rejected',
-        anomalyFlag: true,
-        anomalyReason: reason
-      });
+      if (updatedRejectedLot) {
+        await setDoc(lotRef, updatedRejectedLot, { merge: true });
+      } else {
+        await setDoc(lotRef, {
+          status: 'rejected',
+          anomalyFlag: true,
+          anomalyReason: reason
+        }, { merge: true });
+      }
     } catch (err) {
       console.warn('Firestore rejectLot error, cached locally:', err);
     }
@@ -541,13 +585,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (reqData.lotId) {
         const lotRef = doc(db, 'lots', reqData.lotId);
-        await updateDoc(lotRef, {
+        await setDoc(lotRef, {
           isOutOfCategory: true,
           isPendingCategoryApproval: true,
           requestedCategoryName: reqData.categoryName,
           ratePerKg: 0,
           totalAmount: 0
-        });
+        }, { merge: true });
       }
     } catch (err) {
       console.warn('Firestore requestNewCategory error:', err);
@@ -640,12 +684,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (targetReq.lotId) {
           const lotRef = doc(db, 'lots', targetReq.lotId);
-          await updateDoc(lotRef, {
+          await setDoc(lotRef, {
             ratePerKg: approvedRatePerKg,
             category: assignedStandardCategory,
             isPendingCategoryApproval: false,
             isOutOfCategory: false
-          });
+          }, { merge: true });
         }
       } catch (err) {
         console.warn('Firestore approveCategoryRequest error:', err);
@@ -695,19 +739,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const reqRef = doc(db, 'category_requests', requestId);
-      await updateDoc(reqRef, {
+      await setDoc(reqRef, {
         status: 'rejected',
         rejectionReason,
         reviewedBy
-      });
+      }, { merge: true });
 
       if (targetReq?.lotId) {
         const lotRef = doc(db, 'lots', targetReq.lotId);
-        await updateDoc(lotRef, {
+        await setDoc(lotRef, {
           status: 'rejected',
           anomalyFlag: true,
           anomalyReason: `Category rejected by CPCB Authority: ${rejectionReason}`
-        });
+        }, { merge: true });
       }
     } catch (err) {
       console.warn('Firestore rejectCategoryRequest error:', err);
@@ -732,10 +776,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const lotRef = doc(db, 'lots', lotId);
-      await updateDoc(lotRef, {
+      await setDoc(lotRef, {
         status: 'pending',
         anomalyFlag: true
-      });
+      }, { merge: true });
     } catch (err) {
       console.warn('Firestore reopenLot error, cached locally:', err);
     }
@@ -744,11 +788,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const overrideAnomalyLot = async (lotId: string): Promise<void> => {
+    let updatedAnomalyLot: EWasteLot | undefined;
     setLots((prev) =>
       prev.map((lot) => {
         if (lot.id === lotId) {
           const verifiedMass = lot.weighbridgeWeightKg || lot.weightKg;
-          return {
+          updatedAnomalyLot = {
             ...lot,
             anomalyCleared: true,
             anomalyFlag: false,
@@ -758,6 +803,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             finalPayoutAmount: verifiedMass * lot.ratePerKg,
             settlementUtr: lot.settlementUtr || `UPI-OVERRIDE-${Date.now().toString().slice(-6)}`
           };
+          return updatedAnomalyLot;
         }
         return lot;
       })
@@ -765,13 +811,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const lotRef = doc(db, 'lots', lotId);
-      await updateDoc(lotRef, {
-        anomalyCleared: true,
-        anomalyFlag: false,
-        anomalyResolution: 'SUPERVISOR_OVERRIDE',
-        status: 'paid',
-        settlementUtr: `UPI-OVERRIDE-${Date.now().toString().slice(-6)}`
-      });
+      if (updatedAnomalyLot) {
+        await setDoc(lotRef, updatedAnomalyLot, { merge: true });
+      } else {
+        await setDoc(lotRef, {
+          anomalyCleared: true,
+          anomalyFlag: false,
+          anomalyResolution: 'SUPERVISOR_OVERRIDE',
+          status: 'paid',
+          settlementUtr: `UPI-OVERRIDE-${Date.now().toString().slice(-6)}`
+        }, { merge: true });
+      }
     } catch (err) {
       console.warn('Firestore overrideAnomalyLot error:', err);
     }
@@ -779,10 +829,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const rejectAnomalyLot = async (lotId: string, reason: string): Promise<void> => {
+    let updatedRejectedLot: EWasteLot | undefined;
     setLots((prev) =>
       prev.map((lot) => {
         if (lot.id === lotId) {
-          return {
+          updatedRejectedLot = {
             ...lot,
             status: 'rejected',
             anomalyFlag: true,
@@ -790,6 +841,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             anomalyReason: reason,
             anomalyResolution: 'REJECTED_QUARANTINED'
           };
+          return updatedRejectedLot;
         }
         return lot;
       })
@@ -797,13 +849,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const lotRef = doc(db, 'lots', lotId);
-      await updateDoc(lotRef, {
-        status: 'rejected',
-        anomalyFlag: true,
-        anomalyCleared: false,
-        anomalyReason: reason,
-        anomalyResolution: 'REJECTED_QUARANTINED'
-      });
+      if (updatedRejectedLot) {
+        await setDoc(lotRef, updatedRejectedLot, { merge: true });
+      } else {
+        await setDoc(lotRef, {
+          status: 'rejected',
+          anomalyFlag: true,
+          anomalyCleared: false,
+          anomalyReason: reason,
+          anomalyResolution: 'REJECTED_QUARANTINED'
+        }, { merge: true });
+      }
     } catch (err) {
       console.warn('Firestore rejectAnomalyLot error:', err);
     }

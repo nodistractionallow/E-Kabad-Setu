@@ -11,6 +11,10 @@ const PORT = 3000;
 app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
+// Supported Gemini models from @google/genai specification
+const GEMINI_PRIMARY_MODEL = "gemini-flash-latest";
+const GEMINI_FALLBACK_MODEL = "gemini-3.8-flash";
+
 // Initialize Google GenAI client (Lazy/Safe initialization with fallback)
 const apiKey = process.env.GEMINI_API_KEY;
 let ai: GoogleGenAI | null = null;
@@ -263,7 +267,7 @@ Output raw JSON only. Do NOT wrap in markdown \`\`\`json blocks.`;
         let response;
         try {
           response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: GEMINI_PRIMARY_MODEL,
             contents: { parts: [imagePart, { text: prompt }] },
             config: {
               responseMimeType: "application/json",
@@ -271,9 +275,9 @@ Output raw JSON only. Do NOT wrap in markdown \`\`\`json blocks.`;
             },
           });
         } catch (firstErr) {
-          console.warn("Retrying with gemini-flash-latest:", firstErr);
+          console.warn(`Retrying with ${GEMINI_FALLBACK_MODEL}:`, firstErr);
           response = await ai.models.generateContent({
-            model: "gemini-flash-latest",
+            model: GEMINI_FALLBACK_MODEL,
             contents: { parts: [imagePart, { text: prompt }] },
             config: {
               responseMimeType: "application/json",
@@ -437,14 +441,27 @@ Respond in JSON format:
 }`;
 
       try {
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            temperature: 0.3,
-          },
-        });
+        let response;
+        try {
+          response = await ai.models.generateContent({
+            model: GEMINI_PRIMARY_MODEL,
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              temperature: 0.3,
+            },
+          });
+        } catch (firstErr) {
+          console.warn(`Retrying price insights with ${GEMINI_FALLBACK_MODEL}:`, firstErr);
+          response = await ai.models.generateContent({
+            model: GEMINI_FALLBACK_MODEL,
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              temperature: 0.3,
+            },
+          });
+        }
 
         const parsed = JSON.parse(response.text?.trim() || "{}");
         return res.json({ success: true, data: parsed });

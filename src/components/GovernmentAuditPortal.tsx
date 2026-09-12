@@ -25,8 +25,11 @@ import {
   Check,
   XCircle,
   FileCheck,
-  LogOut
+  LogOut,
+  QrCode,
+  Scale
 } from 'lucide-react';
+import { EWasteLot } from '../types';
 import { DatasetsExplorerModal } from './DatasetsExplorerModal';
 import { FieldResearchModal } from './FieldResearchModal';
 import { UnitEconomicsModal } from './UnitEconomicsModal';
@@ -34,7 +37,9 @@ import { CpcbCategoryApprovalsDesk } from './CpcbCategoryApprovalsDesk';
 import { GovernmentTransactionLedger } from './GovernmentTransactionLedger';
 import { HelpDeskModal } from './HelpDeskModal';
 import { PartnerRegistrationModal } from './PartnerRegistrationModal';
+import { AuthorityQrScannerModal } from './AuthorityQrScannerModal';
 import { playFeedbackChime } from '../utils/speech';
+import { getLiveTrackingUrl } from '../utils/trackingUrl';
 
 export const GovernmentAuditPortal: React.FC = () => {
   const { 
@@ -44,7 +49,9 @@ export const GovernmentAuditPortal: React.FC = () => {
     categoryRequests,
     partnerRegistrations = [],
     approvePartner,
-    rejectPartner
+    rejectPartner,
+    approveAndPayLot,
+    setActivePublicOrderId
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'transactions_ledger' | 'category_approvals' | 'partner_approvals' | 'datasets' | 'field_research' | 'unit_economics' | 'state_audit'>('transactions_ledger');
@@ -53,6 +60,10 @@ export const GovernmentAuditPortal: React.FC = () => {
   const [showUnitEconomicsModal, setShowUnitEconomicsModal] = useState(false);
   const [showHelpDeskModal, setShowHelpDeskModal] = useState(false);
   const [showPartnerModal, setShowPartnerModal] = useState(false);
+  const [showScannerModal, setShowScannerModal] = useState(false);
+  const [scannedLotToAudit, setScannedLotToAudit] = useState<EWasteLot | null>(null);
+  const [auditWeighbridgeMass, setAuditWeighbridgeMass] = useState<number>(0);
+  const [auditPaymentMode, setAuditPaymentMode] = useState<'UPI' | 'CASH'>('UPI');
   const [rejectModalData, setRejectModalData] = useState<{ id: string; name: string } | null>(null);
   const [rejectReasonInput, setRejectReasonInput] = useState('');
 
@@ -115,6 +126,21 @@ export const GovernmentAuditPortal: React.FC = () => {
               <div className="text-[11px] font-mono text-slate-500">Authenticated Auditor</div>
               <div className="text-xs font-bold text-slate-900">Dr. R. K. Sharma (CPCB Western Zone)</div>
             </div>
+
+            {/* Inbound QR Manifest Scanner */}
+            <button
+              type="button"
+              onClick={() => {
+                playFeedbackChime('beep');
+                setShowScannerModal(true);
+              }}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+              title="Scan Vendor QR Pass via Camera or Gallery"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>Scan QR Code</span>
+            </button>
+
             <button
               type="button"
               onClick={() => {
@@ -769,6 +795,188 @@ export const GovernmentAuditPortal: React.FC = () => {
         isOpen={showPartnerModal}
         onClose={() => setShowPartnerModal(false)}
       />
+
+      {/* AUTHORITY INBOUND QR SCANNER MODAL (CAMERA + GALLERY + LOT ID) */}
+      <AuthorityQrScannerModal
+        isOpen={showScannerModal}
+        onClose={() => setShowScannerModal(false)}
+        onLotSelected={(lot) => {
+          setShowScannerModal(false);
+          setActivePublicOrderId(lot.id);
+        }}
+      />
+
+      {/* SCANNED LOT AUDIT & DIRECT SETTLEMENT MODAL */}
+      {scannedLotToAudit && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-5 animate-scaleUp text-slate-900">
+            <div className="flex items-start justify-between">
+              <div>
+                <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                  CPCB Real-time Inbound Inspection
+                </span>
+                <h3 className="text-lg font-black text-slate-950 mt-1">
+                  Manifest #{scannedLotToAudit.id}
+                </h3>
+                <p className="text-xs text-slate-500 font-mono">
+                  Registered by {scannedLotToAudit.collectorName} ({scannedLotToAudit.collectorId})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScannedLotToAudit(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Lot Quick Stats */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs font-mono space-y-2">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Material Item:</span>
+                <span className="font-bold text-slate-900">{scannedLotToAudit.materialName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">CPCB Schedule:</span>
+                <span className="font-bold text-slate-800 uppercase">{scannedLotToAudit.category}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Declared Mass:</span>
+                <span className="font-bold text-slate-900">{scannedLotToAudit.weightKg} kg</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Floor Rate:</span>
+                <span className="font-bold text-slate-900">₹{scannedLotToAudit.ratePerKg} / kg</span>
+              </div>
+              <div className="flex justify-between border-t border-slate-200 pt-1.5">
+                <span className="text-slate-700 font-bold">Current Status:</span>
+                <span className={`font-bold uppercase ${
+                  scannedLotToAudit.status === 'paid' 
+                    ? 'text-emerald-700' 
+                    : scannedLotToAudit.status === 'rejected'
+                    ? 'text-rose-600'
+                    : 'text-amber-600'
+                }`}>
+                  {scannedLotToAudit.status === 'paid' ? 'Settled & Paid' : scannedLotToAudit.status}
+                </span>
+              </div>
+            </div>
+
+            {/* Audit Input Form if Pending */}
+            {scannedLotToAudit.status !== 'paid' ? (
+              <div className="space-y-4 border-t border-slate-100 pt-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <Scale className="w-4 h-4 text-emerald-600" />
+                    <span>Verified Gross Inward Weighbridge Mass (kg)</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={auditWeighbridgeMass}
+                    onChange={(e) => setAuditWeighbridgeMass(Math.max(0.1, parseFloat(e.target.value) || 0))}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-sm font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Certified amount: <strong className="text-emerald-700 font-mono">₹{Math.round(auditWeighbridgeMass * scannedLotToAudit.ratePerKg).toLocaleString('en-IN')}</strong> (at ₹{scannedLotToAudit.ratePerKg}/kg)
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Statutory Payment Disbursal Mode
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAuditPaymentMode('UPI')}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                        auditPaymentMode === 'UPI'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-900 shadow-xs'
+                          : 'bg-white border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      Instant Direct UPI (Default)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAuditPaymentMode('CASH')}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                        auditPaymentMode === 'CASH'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-900 shadow-xs'
+                          : 'bg-white border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      Physical Receipt Cash
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = getLiveTrackingUrl(scannedLotToAudit.id);
+                      window.open(url, '_blank');
+                    }}
+                    className="px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    View Public Tracking
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await approveAndPayLot(scannedLotToAudit.id, auditWeighbridgeMass, auditPaymentMode);
+                      playFeedbackChime('success');
+                      setScannedLotToAudit({
+                        ...scannedLotToAudit,
+                        status: 'paid',
+                        weighbridgeWeightKg: auditWeighbridgeMass,
+                        finalPayoutAmount: Math.round(auditWeighbridgeMass * scannedLotToAudit.ratePerKg),
+                        paymentMode: auditPaymentMode
+                      });
+                    }}
+                    className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Approve & Disburse ₹{Math.round(auditWeighbridgeMass * scannedLotToAudit.ratePerKg).toLocaleString('en-IN')}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 border-t border-slate-100 pt-3">
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-2.5 text-emerald-900 text-xs font-semibold">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <span>This lot is verified and marked as PAID in Firebase Firestore in real-time.</span>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = getLiveTrackingUrl(scannedLotToAudit.id);
+                      window.open(url, '_blank');
+                    }}
+                    className="px-4 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Open Live Tracking Page
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScannedLotToAudit(null)}
+                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

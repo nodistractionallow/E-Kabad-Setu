@@ -23,7 +23,7 @@ const AppRouter: React.FC = () => {
   }, [activePublicOrderId, setActivePublicOrderId]);
 
   if (activePublicOrderId) {
-    const matchedLot = lots.find((l) => l.id === activePublicOrderId);
+    const matchedLot = lots.find((l) => l.id.toUpperCase() === activePublicOrderId.toUpperCase());
     return (
       <PublicOrderTrackingView
         orderId={activePublicOrderId}

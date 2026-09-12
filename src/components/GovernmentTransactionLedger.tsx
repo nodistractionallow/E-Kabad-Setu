@@ -40,7 +40,7 @@ import {
   NATIONAL_TRANSACTIONS_LOG
 } from '../data/authoritiesAndTransactionsData';
 import { LotPriceHistoryModal } from './LotPriceHistoryModal';
-import { parseDateTimeToMs } from '../utils/dateTime';
+import { parseDateTimeToMs, getSearchableDateString } from '../utils/dateTime';
 import { useApp } from '../context/AppContext';
 
 interface GovernmentTransactionLedgerProps {
@@ -231,6 +231,7 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
       // Search Query
       if (searchQuery.trim() !== '') {
         const q = searchQuery.toLowerCase();
+        const dateStr = getSearchableDateString(tx.timestamp || tx.date).toLowerCase();
         const matches =
           tx.id.toLowerCase().includes(q) ||
           tx.lotId.toLowerCase().includes(q) ||
@@ -238,7 +239,9 @@ export const GovernmentTransactionLedger: React.FC<GovernmentTransactionLedgerPr
           tx.vendorName.toLowerCase().includes(q) ||
           tx.collectorName.toLowerCase().includes(q) ||
           tx.materialName.toLowerCase().includes(q) ||
-          tx.statePcb.toLowerCase().includes(q);
+          tx.statePcb.toLowerCase().includes(q) ||
+          (tx.date && tx.date.toLowerCase().includes(q)) ||
+          dateStr.includes(q);
         if (!matches) return false;
       }
 

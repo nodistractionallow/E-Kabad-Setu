@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ShieldCheck, 
   ArrowLeft, 
@@ -16,11 +16,17 @@ import {
   AlertTriangle, 
   FileText,
   CreditCard,
-  Award
+  Award,
+  RefreshCw,
+  Zap,
+  CheckCheck
 } from 'lucide-react';
 import { EWasteLot } from '../types';
 import { playFeedbackChime } from '../utils/speech';
-import { getLiveTrackingUrl, getVercelTrackingUrl, getLiveAppOrigin, VERCEL_DOMAIN } from '../utils/trackingUrl';
+import { getLiveTrackingUrl, VERCEL_DOMAIN, VERCEL_BASE_URL } from '../utils/trackingUrl';
+import { db } from '../lib/firebase';
+import { doc, onSnapshot, getDocFromServer } from 'firebase/firestore';
+import { useApp } from '../context/AppContext';
 
 interface PublicOrderTrackingViewProps {
   orderId: string;
@@ -33,10 +39,20 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
   lot,
   onBackToApp
 }) => {
+  const { lots, currentView, approveAndPayLot } = useApp();
   const [copied, setCopied] = useState(false);
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [isRealtimeActive, setIsRealtimeActive] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>('Connecting...');
 
-  // Fallback demo mock if lot not found in memory (e.g. opened in fresh incognito tab)
-  const displayLot: EWasteLot = lot || {
+  // Check if viewing from an authority role or url param
+  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const isAuthorityFromUrl = urlParams?.get('authority') === '1' || urlParams?.get('auth') === 'true';
+  const isAuthorityRole = currentView === 'recycler' || currentView === 'government' || isAuthorityFromUrl;
+  const [isAuthorityMode, setIsAuthorityMode] = useState<boolean>(isAuthorityRole);
+
+  // Fallback demo mock if lot not yet loaded
+  const defaultFallbackLot: EWasteLot = {
     id: orderId || 'LOT-2026-EW-8812',
     collectorId: 'KBD-MH-4402',
     collectorName: 'Ram Sevak (रामसेवक कांबळे)',
@@ -57,6 +73,107 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
     photoUrl: 'https://images.unsplash.com/photo-1597733336794-12d05021d510?w=400&auto=format&fit=crop&q=80'
   };
 
+  const [currentLot, setCurrentLot] = useState<EWasteLot>(() => {
+    if (lot) return lot;
+    const contextMatch = lots.find((l) => l.id.toUpperCase() === (orderId || '').toUpperCase());
+    return contextMatch || defaultFallbackLot;
+  });
+
+  const [authorityWeightInput, setAuthorityWeightInput] = useState<number>(() => {
+    return currentLot.weighbridgeWeightKg || currentLot.weightKg || 5.0;
+  });
+  const [authorityPaymentMode, setAuthorityPaymentMode] = useState<'UPI' | 'CASH'>('UPI');
+  const [isDisbursing, setIsDisbursing] = useState(false);
+
+  const previousStatusRef = useRef<string>(currentLot.status);
+
+  // Keep authority inputs updated when currentLot changes
+  useEffect(() => {
+    if (currentLot.weighbridgeWeightKg) {
+      setAuthorityWeightInput(currentLot.weighbridgeWeightKg);
+    } else if (currentLot.weightKg) {
+      setAuthorityWeightInput(currentLot.weightKg);
+    }
+  }, [currentLot.weighbridgeWeightKg, currentLot.weightKg]);
+
+  // Sync when prop lot or context lots update
+  useEffect(() => {
+    if (lot) {
+      setCurrentLot(lot);
+    } else {
+      const match = lots.find((l) => l.id.toUpperCase() === (orderId || '').toUpperCase());
+      if (match) {
+        setCurrentLot(match);
+      }
+    }
+  }, [lot, lots, orderId]);
+
+  // Establish direct Real-Time Firestore onSnapshot listener
+  useEffect(() => {
+    const targetLotId = (orderId || lot?.id || currentLot.id).trim();
+    if (!targetLotId) return;
+
+    setIsRealtimeActive(true);
+    setLastSyncTime(new Date().toLocaleTimeString());
+
+    const docRef = doc(db, 'lots', targetLotId);
+
+    const unsubscribe = onSnapshot(
+      docRef,
+      (docSnap) => {
+        setIsRealtimeActive(true);
+        setLastSyncTime(new Date().toLocaleTimeString());
+
+        if (docSnap.exists()) {
+          const liveData = docSnap.data() as EWasteLot;
+          const updated: EWasteLot = {
+            ...liveData,
+            id: docSnap.id
+          };
+
+          // Play success sound when transitioning to 'paid' in real-time
+          if (previousStatusRef.current !== 'paid' && updated.status === 'paid') {
+            playFeedbackChime('success');
+          }
+          previousStatusRef.current = updated.status;
+
+          setCurrentLot(updated);
+        }
+      },
+      (error) => {
+        console.warn('Realtime listener error:', error);
+        setIsRealtimeActive(false);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [orderId, lot?.id]);
+
+  // Manual server force-refresh
+  const handleManualSync = async () => {
+    const targetLotId = (orderId || lot?.id || currentLot.id).trim();
+    if (!targetLotId) return;
+
+    setIsManualSyncing(true);
+    try {
+      const docRef = doc(db, 'lots', targetLotId);
+      const snap = await getDocFromServer(docRef);
+      if (snap.exists()) {
+        const liveData = snap.data() as EWasteLot;
+        setCurrentLot({ ...liveData, id: snap.id });
+        playFeedbackChime('beep');
+      }
+      setLastSyncTime(new Date().toLocaleTimeString());
+    } catch (err) {
+      console.warn('Manual server fetch notice:', err);
+    } finally {
+      setTimeout(() => setIsManualSyncing(false), 500);
+    }
+  };
+
+  const displayLot = currentLot;
   const liveTrackingUrl = getLiveTrackingUrl(displayLot.id);
   const qrCodeImgSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=4&data=${encodeURIComponent(liveTrackingUrl)}`;
 
@@ -71,13 +188,44 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
     window.print();
   };
 
+  const handleAuthorityDisburse = async () => {
+    if (displayLot.status === 'paid') return;
+    setIsDisbursing(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const nowMs = Date.now();
+      const utr = `UTR-CPCB-${nowMs.toString().slice(-8)}`;
+
+      await approveAndPayLot(displayLot.id, authorityWeightInput, authorityPaymentMode);
+
+      setCurrentLot(prev => ({
+        ...prev,
+        status: 'paid',
+        weighbridgeWeightKg: authorityWeightInput,
+        finalPayoutAmount: Math.round(authorityWeightInput * displayLot.ratePerKg),
+        paymentMode: authorityPaymentMode,
+        eprCreditKg: authorityWeightInput,
+        paidAt: nowIso,
+        paidTimestamp: nowMs,
+        settlementUtr: utr
+      }));
+      playFeedbackChime('success');
+    } catch (err) {
+      console.error('Disbursement error:', err);
+    } finally {
+      setIsDisbursing(false);
+    }
+  };
+
   // Determine stage progress
   const isVerified = displayLot.status === 'verified' || displayLot.status === 'paid';
   const isPaid = displayLot.status === 'paid';
   const isRejected = displayLot.status === 'rejected';
+  const effectiveWeight = displayLot.weighbridgeWeightKg || displayLot.weightKg;
+  const effectiveAmount = displayLot.finalPayoutAmount || (displayLot.weighbridgeWeightKg ? Math.round(displayLot.weighbridgeWeightKg * displayLot.ratePerKg) : displayLot.totalAmount);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-16">
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-16 animate-fadeIn">
       {/* Top MoEFCC Statutory Header Bar */}
       <div className="bg-emerald-900 text-emerald-100 text-xs py-2 px-4 border-b border-emerald-800">
         <div className="max-w-4xl mx-auto flex flex-wrap items-center justify-between gap-2">
@@ -87,8 +235,13 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
             <span className="hidden sm:inline text-emerald-300">|</span>
             <span className="hidden sm:inline text-emerald-200">CPCB National E-Waste Traceability Ledger</span>
           </div>
-          <div className="text-[11px] font-mono text-emerald-300">
-            Node: IN-MH-PUNE-V2
+          <div className="flex items-center gap-3 text-[11px] font-mono text-emerald-300">
+            <span className="flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${isRealtimeActive ? 'bg-emerald-400 animate-ping' : 'bg-amber-400'}`}></span>
+              <span>{isRealtimeActive ? 'Firebase Live Connected' : 'Syncing'}</span>
+            </span>
+            <span>•</span>
+            <span>Last Sync: {lastSyncTime}</span>
           </div>
         </div>
       </div>
@@ -112,17 +265,46 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
                 <h1 className="text-lg font-black text-slate-900 tracking-tight">
                   E-Kabad Setu Official Order Tracking
                 </h1>
-                <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
-                  Verified Lot
+                <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
+                  isPaid 
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
+                    : 'bg-amber-100 text-amber-800 border-amber-300'
+                }`}>
+                  {isPaid ? 'Settled & Paid' : 'Live Manifest'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-mono">
-                Manifest #{displayLot.id} • https://e-kabad-setu.vercel.app
+                Manifest #{displayLot.id} • {VERCEL_BASE_URL}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAuthorityMode(prev => !prev)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                isAuthorityMode 
+                  ? 'bg-amber-100 text-amber-900 border-amber-300' 
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+              }`}
+              title="Toggle Official Authority Clearance Mode"
+            >
+              <ShieldCheck className={`w-3.5 h-3.5 ${isAuthorityMode ? 'text-amber-700' : 'text-slate-500'}`} />
+              <span>{isAuthorityMode ? 'Authority Mode: ON' : 'Citizen View'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={isManualSyncing}
+              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Force Real-time Server Sync"
+            >
+              <RefreshCw className={`w-4 h-4 ${isManualSyncing ? 'animate-spin text-emerald-600' : ''}`} />
+              <span className="hidden sm:inline">Sync</span>
+            </button>
+
             <button
               type="button"
               onClick={handlePrint}
@@ -148,6 +330,150 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
       {/* Main Container */}
       <main className="max-w-4xl mx-auto px-4 pt-6 space-y-6">
         
+        {/* Real-time Status Notification Banner if Paid */}
+        {isPaid && (
+          <div className="bg-emerald-600 text-white rounded-3xl p-5 shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border border-emerald-500 animate-fadeIn">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">
+                <CheckCheck className="w-7 h-7 text-white" />
+              </div>
+              <div>
+                <div className="text-xs font-mono uppercase tracking-wider text-emerald-200 font-bold">
+                  Direct Statutory Payment Disbursed in Real-Time
+                </div>
+                <div className="text-lg font-black tracking-tight">
+                  ₹{effectiveAmount.toLocaleString('en-IN')} Paid via {displayLot.paymentMode || 'Instant UPI'}
+                </div>
+                <div className="text-xs text-emerald-100 font-mono mt-0.5">
+                  Weighbridge Certified: {effectiveWeight} kg • EPR Credits Credited
+                </div>
+              </div>
+            </div>
+            <div className="text-right shrink-0 bg-emerald-700/50 px-3.5 py-2 rounded-2xl border border-emerald-400/30">
+              <div className="text-[10px] font-mono uppercase text-emerald-200">Transaction Status</div>
+              <div className="text-xs font-mono font-bold text-white">SUCCESS / CLEARED</div>
+            </div>
+          </div>
+        )}
+
+        {/* OFFICIAL AUTHORITY WEIGHBRIDGE & SETTLEMENT ACTION BOX */}
+        {isAuthorityMode && (
+          !isPaid ? (
+            /* CASE 1: UNPAID -> AUTHORITY ACTION WITH WEIGHT & PAY OPTION */
+            <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-400 rounded-3xl p-6 shadow-md space-y-4 animate-fadeIn">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-amber-200/80">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <Scale className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-900 bg-amber-200 px-2.5 py-0.5 rounded-full border border-amber-300">
+                        Authority Gate Clearance
+                      </span>
+                      <span className="text-xs font-extrabold text-amber-800">STATUS: UNPAID</span>
+                    </div>
+                    <h2 className="text-base font-extrabold text-slate-900 mt-0.5">
+                      Class-III Weighbridge Audit & Direct Statutory Settlement
+                    </h2>
+                  </div>
+                </div>
+                <div className="text-left sm:text-right">
+                  <div className="text-[10px] font-mono uppercase text-amber-800 font-bold">Safai Sathi / Vendor</div>
+                  <div className="text-xs font-bold text-slate-900">{displayLot.collectorName} ({displayLot.collectorId})</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Class-III Verified Gross Weight (kg)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      value={authorityWeightInput}
+                      onChange={(e) => setAuthorityWeightInput(Math.max(0.1, parseFloat(e.target.value) || 0))}
+                      className="w-full pl-3 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                    />
+                    <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-mono">kg</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500 font-mono mt-1 block">
+                    Declared Mass: {displayLot.weightKg} kg
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Statutory Payment Mode
+                  </label>
+                  <select
+                    value={authorityPaymentMode}
+                    onChange={(e) => setAuthorityPaymentMode(e.target.value as 'UPI' | 'CASH')}
+                    className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="UPI">Direct Instant UPI</option>
+                    <option value="CASH">Physical Cash Voucher</option>
+                  </select>
+                  <span className="text-[11px] text-slate-500 font-mono mt-1 block">
+                    CPCB Floor Rate: ₹{displayLot.ratePerKg}/kg
+                  </span>
+                </div>
+
+                <div className="flex flex-col justify-end">
+                  <button
+                    type="button"
+                    disabled={isDisbursing}
+                    onClick={handleAuthorityDisburse}
+                    className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-60"
+                  >
+                    {isDisbursing ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Disbursing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-5 h-5" />
+                        <span>Verify & Disburse ₹{Math.round(authorityWeightInput * displayLot.ratePerKg).toLocaleString('en-IN')}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* CASE 2: ALREADY PAID -> AUTHORITY VERIFIED BANNER (NO PAYING OPTION) */
+            <div className="bg-emerald-50 border-2 border-emerald-400 rounded-3xl p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-fadeIn">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <ShieldCheck className="w-7 h-7" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-800 bg-emerald-200/70 px-2.5 py-0.5 rounded-full border border-emerald-300">
+                      Authority Audit
+                    </span>
+                    <span className="text-xs font-black text-emerald-700">STATUS: VERIFIED & PAID</span>
+                  </div>
+                  <div className="text-base font-extrabold text-slate-900 mt-0.5">
+                    Settlement Completed • No Pending Payment
+                  </div>
+                  <div className="text-xs text-slate-600 font-mono mt-0.5">
+                    Disbursed: ₹{effectiveAmount.toLocaleString('en-IN')} via {displayLot.paymentMode || 'Instant UPI'} • Weighbridge Mass: {effectiveWeight} kg • UTR: {displayLot.settlementUtr || 'UTR-CPCB-8812'}
+                  </div>
+                </div>
+              </div>
+              <div className="px-4 py-2 bg-white border border-emerald-300 rounded-2xl text-right shrink-0">
+                <div className="text-[10px] font-mono uppercase text-slate-400">Payment Status</div>
+                <div className="text-xs font-mono font-black text-emerald-700">100% SETTLED</div>
+              </div>
+            </div>
+          )
+        )}
+
         {/* Status Hero Card */}
         <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-slate-100">
@@ -180,11 +506,11 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
               </div>
               <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                 {isPaid
-                  ? 'The scrap lot has completed weighing, contamination review, and direct statutory UPI transfer. CPCB EPR recycling certificate has been registered.'
+                  ? 'The scrap lot has completed weighing, contamination review, and direct statutory UPI transfer. CPCB EPR recycling certificate has been registered in real time.'
                   : isRejected
                   ? 'This lot was rejected by facility inspectors due to safety hazard, high chemical contamination, or statutory variance.'
                   : isVerified
-                  ? 'Inward gross and tare weights recorded on Class-III weighbridge. UPI settlement is currently in queue.'
+                  ? 'Inward gross and tare weights recorded on Class-III weighbridge. UPI settlement is currently being finalized.'
                   : 'Scrap lot registered by collector. Awaiting arrival at authorized recycler facility gate for digital weighbridge audit.'}
               </p>
             </div>
@@ -196,7 +522,7 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
                 alt="Order QR Code" 
                 className="w-24 h-24 object-contain rounded-lg border border-slate-200 bg-white p-1" 
               />
-              <span className="text-[10px] font-mono text-slate-500 mt-1">Scan for Live Status</span>
+              <span className="text-[10px] font-mono text-slate-500 mt-1">Live Manifest QR</span>
             </div>
           </div>
 
@@ -215,7 +541,7 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
                 </div>
                 <p className="text-[11px] text-slate-600">Geo-tagged at source by registered Safai Sathi.</p>
                 <div className="text-[10px] font-mono text-emerald-700 font-semibold mt-1">
-                  {displayLot.timestamp.split('T')[0] || 'Today'}
+                  {displayLot.timestamp || '08/09/2026 01:08 AM'}
                 </div>
               </div>
 
@@ -227,7 +553,7 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
                 </div>
                 <p className="text-[11px] text-slate-600">Class-III certified gross/tare weight verification.</p>
                 <div className="text-[10px] font-mono text-slate-500 font-semibold mt-1">
-                  {displayLot.weighbridgeWeightKg ? `${displayLot.weighbridgeWeightKg} kg Verified` : 'Pending Gate Arrival'}
+                  {displayLot.weighbridgeWeightKg ? `${displayLot.weighbridgeWeightKg} kg Verified` : isPaid ? `${effectiveWeight} kg Certified` : 'Pending Gate Arrival'}
                 </div>
               </div>
 
@@ -250,8 +576,8 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
                   <span>4. Direct Settlement</span>
                 </div>
                 <p className="text-[11px] text-slate-600">Instant UPI transfer & CPCB EPR certificate.</p>
-                <div className="text-[10px] font-mono text-slate-500 font-semibold mt-1">
-                  {isPaid ? `₹${displayLot.totalAmount.toLocaleString('en-IN')} Paid` : 'Awaiting Final Pay'}
+                <div className="text-[10px] font-mono font-semibold mt-1 text-emerald-700">
+                  {isPaid ? `₹${effectiveAmount.toLocaleString('en-IN')} Disbursed` : 'Awaiting Final Pay'}
                 </div>
               </div>
 
@@ -285,7 +611,7 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
               <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
                 <span className="text-slate-500">Verified Weighbridge Mass:</span>
                 <span className="font-bold text-emerald-700">
-                  {displayLot.weighbridgeWeightKg ? `${displayLot.weighbridgeWeightKg} kg` : 'Pending Gate Weighment'}
+                  {displayLot.weighbridgeWeightKg ? `${displayLot.weighbridgeWeightKg} kg` : isPaid ? `${effectiveWeight} kg` : 'Pending Gate Weighment'}
                 </span>
               </div>
               <div className="flex justify-between items-center py-1.5 border-b border-slate-100">
@@ -295,7 +621,7 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
               <div className="flex justify-between items-center py-1.5 pt-2">
                 <span className="text-slate-700 font-bold">Total Statutory Value:</span>
                 <span className="font-black text-base text-emerald-800">
-                  ₹{displayLot.totalAmount.toLocaleString('en-IN')}
+                  ₹{effectiveAmount.toLocaleString('en-IN')}
                 </span>
               </div>
             </div>
@@ -348,7 +674,7 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
               Guaranteed by E-Waste (Management) Rules 2022, Ministry of Environment, Forest & Climate Change
             </p>
             <p className="text-slate-600 leading-relaxed">
-              Every transaction registered on <strong className="font-mono text-emerald-800">https://e-kabad-setu.vercel.app</strong> is cryptographically recorded, preventing informal open-acid burning, illegal dumping, and unfair informal exploitation. Direct UPI transfer is mandated upon certified weighbridge deposit.
+              Every transaction registered on <strong className="font-mono text-emerald-800">{VERCEL_BASE_URL}</strong> is cryptographically recorded in real time via Firebase Firestore, preventing informal open-acid burning, illegal dumping, and unfair informal exploitation. Direct statutory UPI transfer is mandated upon certified weighbridge deposit.
             </p>
           </div>
         </div>

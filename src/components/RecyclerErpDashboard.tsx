@@ -2,8 +2,9 @@ import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { EWasteLot, MaterialItem } from '../types';
 import { playFeedbackChime } from '../utils/speech';
-import { parseDateTimeToMs } from '../utils/dateTime';
+import { parseDateTimeToMs, getSearchableDateString } from '../utils/dateTime';
 import { TablePagination } from './TablePagination';
+import { AuthorityQrScannerModal } from './AuthorityQrScannerModal';
 import { 
   Factory, 
   ShieldCheck, 
@@ -55,7 +56,8 @@ export const RecyclerErpDashboard: React.FC = () => {
     reopenLot, 
     updateMaterialPrice, 
     setCurrentView, 
-    speak 
+    speak,
+    setActivePublicOrderId
   } = useApp();
 
   // Active ERP Tab (Economics, Datasets, Research moved strictly to Government Portal)
@@ -128,6 +130,7 @@ export const RecyclerErpDashboard: React.FC = () => {
   const [verifyingLot, setVerifyingLot] = useState<EWasteLot | null>(null);
   const [weighbridgeInput, setWeighbridgeInput] = useState<number>(0);
   const [selectedPaymentMode, setSelectedPaymentMode] = useState<'UPI' | 'CASH'>('UPI');
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
   
   // Tab 1: Pending vs Paid Tab State
   const [inboundTab, setInboundTab] = useState<'pending' | 'paid'>('pending');
@@ -212,11 +215,14 @@ export const RecyclerErpDashboard: React.FC = () => {
   // 1. Pending Queue Table Filtering, Sorting & Pagination
   const filteredPendingLots = useMemo(() => {
     return pendingLots.filter((lot) => {
+      const dateStr = getSearchableDateString(lot.timestamp).toLowerCase();
       const matchSearch = pendingSearch === '' || 
         lot.id.toLowerCase().includes(pendingSearch.toLowerCase()) ||
         lot.collectorName.toLowerCase().includes(pendingSearch.toLowerCase()) ||
         lot.collectorId.toLowerCase().includes(pendingSearch.toLowerCase()) ||
-        lot.materialName.toLowerCase().includes(pendingSearch.toLowerCase());
+        lot.materialName.toLowerCase().includes(pendingSearch.toLowerCase()) ||
+        (lot.facilityName && lot.facilityName.toLowerCase().includes(pendingSearch.toLowerCase())) ||
+        dateStr.includes(pendingSearch.toLowerCase());
       const matchCat = pendingCategory === 'ALL' || lot.category.toLowerCase() === pendingCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
@@ -239,17 +245,29 @@ export const RecyclerErpDashboard: React.FC = () => {
   // 2. Verified & Paid Table Filtering, Sorting & Pagination
   const filteredPaidLots = useMemo(() => {
     return verifiedLots.filter((lot) => {
+      const dateStr = getSearchableDateString(lot.paidAt || lot.timestamp).toLowerCase();
       const matchSearch = paidSearch === '' ||
         lot.id.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.collectorName.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.collectorId.toLowerCase().includes(paidSearch.toLowerCase()) ||
         lot.materialName.toLowerCase().includes(paidSearch.toLowerCase()) ||
+        (lot.facilityName && lot.facilityName.toLowerCase().includes(paidSearch.toLowerCase())) ||
+        (lot.settlementUtr && lot.settlementUtr.toLowerCase().includes(paidSearch.toLowerCase())) ||
+        dateStr.includes(paidSearch.toLowerCase()) ||
         (lot.paymentMode && lot.paymentMode.toLowerCase().includes(paidSearch.toLowerCase()));
       const matchCat = paidCategory === 'ALL' || lot.category.toLowerCase() === paidCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (paidSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
-      if (paidSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
+      if (paidSort === 'date_desc') {
+        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.timestamp);
+        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.timestamp);
+        return timeB - timeA;
+      }
+      if (paidSort === 'date_asc') {
+        const timeA = a.paidTimestamp || parseDateTimeToMs(a.paidAt) || parseDateTimeToMs(a.timestamp);
+        const timeB = b.paidTimestamp || parseDateTimeToMs(b.paidAt) || parseDateTimeToMs(b.timestamp);
+        return timeA - timeB;
+      }
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (paidSort === 'mass_desc') return massB - massA;
@@ -533,6 +551,20 @@ export const RecyclerErpDashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* Quick Inbound Manifest QR Scanner */}
+            <button
+              type="button"
+              onClick={() => {
+                playFeedbackChime('beep');
+                setIsQrScannerOpen(true);
+              }}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+              title="Scan Vendor QR Pass via Live Camera or Device Gallery"
+            >
+              <QrCode className="w-3.5 h-3.5" />
+              <span>Scan QR Pass</span>
+            </button>
+
             {/* Restricted Tools Moved to Government Portal; Direct link provided */}
             <button
               type="button"
@@ -621,7 +653,19 @@ export const RecyclerErpDashboard: React.FC = () => {
                   Real-time queue of traceable lots arriving from registered informal collectors. Verify mass against digital declaration.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    playFeedbackChime('beep');
+                    setIsQrScannerOpen(true);
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+                  title="Scan Inbound Scrap Manifest QR Code via Camera or Gallery"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>Scan QR Code (Camera / Gallery)</span>
+                </button>
                 <span className="text-xs font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-full flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
                   Live Sensor Stream Active
@@ -2690,6 +2734,16 @@ export const RecyclerErpDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* AUTHORITY INBOUND QR SCANNER MODAL (CAMERA + GALLERY + LOT ID) */}
+      <AuthorityQrScannerModal
+        isOpen={isQrScannerOpen}
+        onClose={() => setIsQrScannerOpen(false)}
+        onLotSelected={(selectedLot) => {
+          setIsQrScannerOpen(false);
+          setActivePublicOrderId(selectedLot.id);
+        }}
+      />
 
     </div>
   );

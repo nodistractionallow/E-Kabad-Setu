@@ -1,0 +1,79 @@
+{
+  "entities": {
+    "EWasteLot": {
+      "title": "EWasteLot",
+      "description": "Traceable scrap e-waste manifest lot registered by informal collector and verified by recycler",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "collectorId": { "type": "string" },
+        "collectorName": { "type": "string" },
+        "collectorPhone": { "type": "string" },
+        "materialId": { "type": "string" },
+        "materialName": { "type": "string" },
+        "category": { "type": "string" },
+        "weightKg": { "type": "number" },
+        "weighbridgeWeightKg": { "type": "number" },
+        "ratePerKg": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "finalPayoutAmount": { "type": "number" },
+        "paymentMode": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "verified", "paid", "rejected"] },
+        "timestamp": { "type": "string" },
+        "gpsLocation": { "type": "string" },
+        "facilityId": { "type": "string" },
+        "facilityName": { "type": "string" },
+        "distanceKm": { "type": "number" },
+        "hazardFlag": { "type": "boolean" },
+        "photoUrl": { "type": "string" }
+      },
+      "required": ["id", "collectorName", "materialName", "category", "weightKg", "ratePerKg", "totalAmount", "status", "timestamp"]
+    },
+    "MaterialItem": {
+      "title": "MaterialItem",
+      "description": "E-waste scrap commodity listing with certified CPCB mandi pricing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name_en": { "type": "string" },
+        "name_hi": { "type": "string" },
+        "name_mr": { "type": "string" },
+        "grade": { "type": "string" },
+        "pricePerKg": { "type": "number" },
+        "trend": { "type": "number" },
+        "category": { "type": "string" },
+        "hazardLevel": { "type": "string" }
+      },
+      "required": ["id", "name_en", "pricePerKg", "category"]
+    },
+    "CollectorProfile": {
+      "title": "CollectorProfile",
+      "description": "Registered informal waste collector / Safai Sathi profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "upiId": { "type": "string" },
+        "todayEarnings": { "type": "number" },
+        "todayWeightKg": { "type": "number" },
+        "totalLotsCount": { "type": "number" }
+      },
+      "required": ["id", "name", "phone"]
+    }
+  },
+  "firestore": {
+    "/lots/{lotId}": {
+      "schema": "EWasteLot",
+      "description": "Live real-time collection of e-waste lots and manifests"
+    },
+    "/materials/{materialId}": {
+      "schema": "MaterialItem",
+      "description": "Live CPCB Mandi scrap material prices"
+    },
+    "/collectors/{collectorId}": {
+      "schema": "CollectorProfile",
+      "description": "Registered collectors and financial tallies"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 /**
  * Robust date-time parser and sorting utility for E-Kabad Setu
- * Handles various timestamp formats (ISO, 'YYYY-MM-DD hh:mm A', 'YYYY-MM-DD', epoch)
+ * Handles Indian & international timestamp formats (DD/MM/YYYY, ISO, YYYY-MM-DD, epoch)
  */
 
 export function parseDateTimeToMs(dateStr?: string | number | null): number {
@@ -10,16 +10,34 @@ export function parseDateTimeToMs(dateStr?: string | number | null): number {
   const trimmed = String(dateStr).trim();
   if (!trimmed) return 0;
 
-  // 1. Direct standard JS parsing (handles ISO, UTC, standard RFC strings)
-  const directParsed = Date.parse(trimmed);
-  if (!isNaN(directParsed)) {
-    return directParsed;
+  // 1. Format: "DD/MM/YYYY hh:mm A" or "DD-MM-YYYY" (Common in India / en-GB, e.g. "08/09/2026 01:08 AM", "09/09/2026, 01:08 AM")
+  // MUST precede Date.parse so that 08/09/2026 is parsed as 8th September, NOT 9th August!
+  const matchDMY = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?/i);
+  if (matchDMY) {
+    const [, dayStr, monthStr, yearStr, hourStr, minStr, secStr, meridiem] = matchDMY;
+    const day = parseInt(dayStr, 10);
+    const month = parseInt(monthStr, 10) - 1; // 0-indexed month
+    const year = parseInt(yearStr, 10);
+    let hour = hourStr ? parseInt(hourStr, 10) : 0;
+    const min = minStr ? parseInt(minStr, 10) : 0;
+    const sec = secStr ? parseInt(secStr, 10) : 0;
+
+    if (meridiem) {
+      const merUpper = meridiem.toUpperCase();
+      if (merUpper === 'PM' && hour < 12) hour += 12;
+      if (merUpper === 'AM' && hour === 12) hour = 0;
+    }
+
+    const d = new Date(year, month, day, hour, min, sec);
+    if (!isNaN(d.getTime())) {
+      return d.getTime();
+    }
   }
 
   // 2. Format: "YYYY-MM-DD hh:mm A" e.g. "2026-09-04 11:20 AM" or "2026-09-02 04:30 PM"
-  const match1 = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?/i);
-  if (match1) {
-    const [, yearStr, monthStr, dayStr, hourStr, minStr, secStr, meridiem] = match1;
+  const matchYMD = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?/i);
+  if (matchYMD) {
+    const [, yearStr, monthStr, dayStr, hourStr, minStr, secStr, meridiem] = matchYMD;
     const year = parseInt(yearStr, 10);
     const month = parseInt(monthStr, 10) - 1;
     const day = parseInt(dayStr, 10);
@@ -39,29 +57,35 @@ export function parseDateTimeToMs(dateStr?: string | number | null): number {
     }
   }
 
-  // 3. Format: "DD/MM/YYYY hh:mm A" or "DD-MM-YYYY"
-  const match2 = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+(\d{1,2}):(\d{2})\s*(AM|PM)?)?/i);
-  if (match2) {
-    const [, dayStr, monthStr, yearStr, hourStr, minStr, meridiem] = match2;
-    const year = parseInt(yearStr, 10);
-    const month = parseInt(monthStr, 10) - 1;
-    const day = parseInt(dayStr, 10);
-    let hour = hourStr ? parseInt(hourStr, 10) : 0;
-    const min = minStr ? parseInt(minStr, 10) : 0;
-
-    if (meridiem) {
-      const merUpper = meridiem.toUpperCase();
-      if (merUpper === 'PM' && hour < 12) hour += 12;
-      if (merUpper === 'AM' && hour === 12) hour = 0;
-    }
-
-    const d = new Date(year, month, day, hour, min);
-    if (!isNaN(d.getTime())) {
-      return d.getTime();
-    }
+  // 3. Direct standard JS parsing (handles ISO 8601, UTC, standard RFC strings)
+  const directParsed = Date.parse(trimmed);
+  if (!isNaN(directParsed)) {
+    return directParsed;
   }
 
   return 0;
+}
+
+/**
+ * Returns a human-readable date string including month name for search and display
+ * e.g. "08 Sep 2026 01:08 AM (September 2026)"
+ */
+export function getSearchableDateString(dateStr?: string | number | null): string {
+  if (!dateStr) return '';
+  const ms = parseDateTimeToMs(dateStr);
+  if (!ms) return String(dateStr);
+  const d = new Date(ms);
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  const shortMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthFull = monthNames[d.getMonth()] || '';
+  const monthShort = shortMonths[d.getMonth()] || '';
+  const day = String(d.getDate()).padStart(2, '0');
+  const year = d.getFullYear();
+  
+  return `${String(dateStr)} ${day}/${String(d.getMonth() + 1).padStart(2, '0')}/${year} ${day}-${String(d.getMonth() + 1).padStart(2, '0')}-${year} ${monthShort} ${monthFull} ${year}`;
 }
 
 /**
