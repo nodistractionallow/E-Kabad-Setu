@@ -54,6 +54,9 @@ export interface MaterialDetectionResult {
   confidenceScore?: number; // 0 to 100
   allPredictions?: CategoryConfidenceScore[];
   
+  // Set to true when low confidence caused auto-classification to "Other E-waste"
+  isAutoClassifiedOther?: boolean;
+
   // Rejection details (if status !== 'valid_material')
   rejectionCode?: QualityRejectionReason | 'LOW_CONFIDENCE';
   userMessageEn: string;

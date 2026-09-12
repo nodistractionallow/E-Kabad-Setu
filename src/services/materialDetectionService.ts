@@ -212,11 +212,15 @@ export class MaterialDetectionService {
   }
 
   /**
-   * Robust Face Detector:
-   * Checks skin chrominance cluster (YCbCr / HSV) combined with facial geometry:
-   * - Central oval cluster aspect ratio (1.2 - 1.6)
-   * - Eye-socket / eyebrow intensity valley (darker band in upper third of face cluster)
-   * - Mouth valley gradient in lower third
+   * MAXIMALLY SENSITIVE Face Detector:
+   * Uses a wide YCbCr skin locus covering all skin tones including
+   * overexposed light skin and Indian/South-Asian skin tones.
+   *
+   * Trigger conditions (OR logic for maximum sensitivity):
+   * 1. skinRatio >= 0.18 → Large skin area: immediate face flag regardless of geometry
+   * 2. skinRatio >= 0.07 AND faceConfidence >= 0.45 → Composite geometric check
+   *
+   * Widened YCbCr locus: Cb [72, 132], Cr [128, 178], R > G, (R-G) >= 8
    */
   private detectHumanFace(
     data: Uint8ClampedArray,
@@ -246,17 +250,18 @@ export class MaterialDetectionService {
         const g = data[idx + 1];
         const b = data[idx + 2];
 
-        // Chrominance conversion to YCbCr
+        // WIDENED YCbCr skin locus — covers light, medium, dark and Indian skin tones
+        // Cb: [72, 132] (widened from 77–127), Cr: [128, 178] (widened from 133–173)
         const cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 128;
         const cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 128;
 
-        // Indian and global human skin tone locus in YCbCr space:
-        // Cb in [77, 127], Cr in [133, 173], with R > G > B and (R - G) > 15
+        // Relaxed condition: (R-G) >= 8 (was 12), wider Cb/Cr, R > 60 to exclude near-black
         const isSkin =
-          cb >= 77 && cb <= 127 &&
-          cr >= 133 && cr <= 173 &&
-          r > g && g > b &&
-          (r - g) >= 12;
+          cb >= 72 && cb <= 132 &&
+          cr >= 128 && cr <= 178 &&
+          r > g &&
+          (r - g) >= 8 &&
+          r > 60;
 
         if (isSkin) {
           skinPixelCount++;
@@ -274,8 +279,14 @@ export class MaterialDetectionService {
     const sampledPixels = (sampleW * sampleH) / (step * step);
     const skinRatio = skinPixelCount / sampledPixels;
 
-    // If skin area is negligible (< 12%), it's not a prominent face
-    if (skinRatio < 0.12 || skinPixelCount === 0) {
+    // SHORTCUT: Very large skin area (>= 18%) → immediate face flag
+    // This catches selfies, close-up portraits, and partial faces confidently
+    if (skinRatio >= 0.18) {
+      return { isFaceDetected: true, confidence: 0.90 };
+    }
+
+    // Minimum skin threshold lowered to 7% (was 12%) to catch partial / side faces
+    if (skinRatio < 0.07 || skinPixelCount === 0) {
       return { isFaceDetected: false, confidence: 0 };
     }
 
@@ -287,13 +298,13 @@ export class MaterialDetectionService {
 
     const aspectRatio = faceHeight / faceWidth;
 
-    // Human face aspect ratio typically falls between 1.1 and 1.8
-    const isHumanOval = aspectRatio >= 1.05 && aspectRatio <= 1.95;
+    // Widened aspect ratio range: 0.9–2.2 (was 1.05–1.95)
+    // Catches tilted/angled/side-profile faces
+    const isHumanOval = aspectRatio >= 0.9 && aspectRatio <= 2.2;
 
-    // Verify eye-socket darkness valley in upper half of the cluster
+    // Eye-socket darkness valley check
     const midY = Math.floor((minY + maxY) / 2);
     const upperY = Math.floor(minY + faceHeight * 0.28);
-    const lowerY = Math.floor(minY + faceHeight * 0.72);
 
     let upperLuminance = 0;
     let upperCount = 0;
@@ -314,17 +325,19 @@ export class MaterialDetectionService {
     const avgUpperLum = upperCount > 0 ? upperLuminance / upperCount : 128;
     const avgMidLum = midCount > 0 ? midLuminance / midCount : 128;
 
-    // Eye sockets/eyebrows and hair are darker than cheek/forehead highlight
-    const hasFacialLuminanceGradient = avgUpperLum <= avgMidLum * 1.05;
+    // Relaxed gradient check: upper band similar or slightly darker (was 1.05)
+    const hasFacialLuminanceGradient = avgUpperLum <= avgMidLum * 1.12;
 
-    // Calculate composite face confidence
+    // Composite face confidence scoring
     let faceConfidence = 0;
     if (isHumanOval) faceConfidence += 0.40;
-    if (skinRatio >= 0.16) faceConfidence += 0.35;
+    if (skinRatio >= 0.10) faceConfidence += 0.35;      // lowered from 0.16
+    else if (skinRatio >= 0.07) faceConfidence += 0.20; // partial credit for small skin areas
     if (hasFacialLuminanceGradient) faceConfidence += 0.25;
 
+    // LOWERED trigger threshold: 0.45 (was 0.65) — catches partial/angled/side faces
     return {
-      isFaceDetected: faceConfidence >= 0.65,
+      isFaceDetected: faceConfidence >= 0.45,
       confidence: Math.round(faceConfidence * 100) / 100
     };
   }
@@ -410,18 +423,28 @@ export class MaterialDetectionService {
     const topPrediction = rawPredictions[0];
     const inferenceTime = Math.round(performance.now() - startTime);
 
-    // 4. Strict Confidence Rule: >= 70% accepted, < 70% rejected
+    // 4. Confidence Rule: < 70% → auto-classify as "Other E-waste" (factory decides rate)
     if (topPrediction.percentage < 70) {
+      const otherDetails = this.getCategoryCommercialMetadata('Other E-waste');
       return {
-        success: false,
-        status: 'rejected_low_confidence',
-        rejectionCode: 'LOW_CONFIDENCE',
+        success: true,
+        status: 'valid_material',
+        predictedCategory: 'Other E-waste',
         confidenceScore: topPrediction.percentage,
         allPredictions: rawPredictions,
-        userMessageEn: 'Category not found. Please take a clearer photo of the material.',
-        userMessageHi: 'श्रेणी नहीं मिली। कृपया सामग्री की साफ फोटो लें।',
-        userMessageMr: 'प्रवर्ग सापडला नाही. कृपया सामग्रीचा अधिक स्पष्ट फोटो काढा.',
+        isAutoClassifiedOther: true,
+        userMessageEn: 'Category unclear — classified as Other E-waste. Factory will decide final rate.',
+        userMessageHi: 'श्रेणी स्पष्ट नहीं — अन्य ई-कचरे के रूप में दर्ज। कारखाना अंतिम भाव तय करेगा।',
+        userMessageMr: 'प्रवर्ग अस्पष्ट — इतर ई-कचरा म्हणून नोंदवले. कारखाना अंतिम दर ठरवेल.',
         qualityMetrics: quality.metrics,
+        suggestedRatePerKg: 0,
+        grade: otherDetails.grade,
+        hazardLevel: otherDetails.hazardLevel,
+        hazardWarningEn: otherDetails.hazardWarningEn,
+        hazardWarningHi: otherDetails.hazardWarningHi,
+        safeActionEn: otherDetails.safeActionEn,
+        safeActionHi: otherDetails.safeActionHi,
+        crmYield: otherDetails.crmYield,
         source: 'on-device-tflite',
         inferenceTimeMs: inferenceTime,
         isOffline: true
