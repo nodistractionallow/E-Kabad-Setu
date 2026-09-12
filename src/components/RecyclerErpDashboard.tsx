@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { EWasteLot, MaterialItem } from '../types';
 import { playFeedbackChime } from '../utils/speech';
 import { TablePagination } from './TablePagination';
+import { parseDateTimeToMs } from '../utils/dateTime';
 import { 
   Factory, 
   ShieldCheck, 
@@ -195,7 +196,12 @@ export const RecyclerErpDashboard: React.FC = () => {
   } | null>(null);
 
   const pendingLots = lots.filter((l) => l.status === 'pending');
-  const flaggedAnomalyLots = lots.filter((l) => l.status !== 'rejected' && (l.anomalyFlag || l.ratePerKg > 900 || (l.category === 'pcb' && l.weightKg > 50)));
+  const flaggedAnomalyLots = lots.filter((l) => 
+    l.status !== 'rejected' && 
+    l.status !== 'paid' && 
+    !l.anomalyCleared && 
+    Boolean(l.anomalyFlag || (l.ratePerKg > 900 && !l.anomalyCleared) || (l.category === 'pcb' && l.weightKg > 50 && !l.anomalyCleared))
+  );
   const rejectedLots = lots.filter((l) => l.status === 'rejected');
   const verifiedLots = lots.filter((l) => l.status === 'paid' || l.status === 'verified');
 
@@ -220,8 +226,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = pendingCategory === 'ALL' || lot.category.toLowerCase() === pendingCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (pendingSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (pendingSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (pendingSort === 'date_desc') return parseDateTimeToMs(b.timestamp) - parseDateTimeToMs(a.timestamp);
+      if (pendingSort === 'date_asc') return parseDateTimeToMs(a.timestamp) - parseDateTimeToMs(b.timestamp);
       if (pendingSort === 'mass_desc') return b.weightKg - a.weightKg;
       if (pendingSort === 'mass_asc') return a.weightKg - b.weightKg;
       if (pendingSort === 'rate_desc') return b.ratePerKg - a.ratePerKg;
@@ -248,8 +254,8 @@ export const RecyclerErpDashboard: React.FC = () => {
       const matchCat = paidCategory === 'ALL' || lot.category.toLowerCase() === paidCategory.toLowerCase();
       return matchSearch && matchCat;
     }).sort((a, b) => {
-      if (paidSort === 'date_desc') return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-      if (paidSort === 'date_asc') return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (paidSort === 'date_desc') return parseDateTimeToMs(b.paidAt || b.timestamp) - parseDateTimeToMs(a.paidAt || a.timestamp);
+      if (paidSort === 'date_asc') return parseDateTimeToMs(a.paidAt || a.timestamp) - parseDateTimeToMs(b.paidAt || b.timestamp);
       const massA = a.weighbridgeWeightKg || a.weightKg;
       const massB = b.weighbridgeWeightKg || b.weightKg;
       if (paidSort === 'mass_desc') return massB - massA;
@@ -454,6 +460,23 @@ export const RecyclerErpDashboard: React.FC = () => {
     const start = (eprPage - 1) * PAGE_SIZE;
     return filteredEprLots.slice(start, start + PAGE_SIZE);
   }, [filteredEprLots, eprPage]);
+
+  const [isOverridingId, setIsOverridingId] = useState<string | null>(null);
+
+  const handleOverrideAnomalyAndPay = async (lot: EWasteLot) => {
+    try {
+      setIsOverridingId(lot.id);
+      playFeedbackChime('success');
+      const weight = lot.weighbridgeWeightKg || lot.weightKg || 5.0;
+      const rate = (lot.ratePerKg && lot.ratePerKg > 0) ? lot.ratePerKg : 120;
+      await approveAndPayLot(lot.id, weight, 'UPI', rate);
+      speak(`Lot ${lot.id} supervisor override approved. Payment completed and anomaly cleared.`);
+    } catch (e) {
+      console.error('Error overriding anomaly:', e);
+    } finally {
+      setIsOverridingId(null);
+    }
+  };
 
   const openWeighbridgeModal = (lot: EWasteLot) => {
     playFeedbackChime('beep');
@@ -1718,12 +1741,23 @@ export const RecyclerErpDashboard: React.FC = () => {
 
                                         <button
                                           type="button"
+                                          disabled={isOverridingId === lot.id}
+                                          onClick={() => handleOverrideAnomalyAndPay(lot)}
+                                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg border border-emerald-700 shadow-2xs transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                          title="Supervisor Clearance: Clear Anomaly & Complete Payout"
+                                        >
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                                          <span className="hidden sm:inline">{isOverridingId === lot.id ? 'Processing...' : 'Override & Pay'}</span>
+                                        </button>
+
+                                        <button
+                                          type="button"
                                           onClick={() => openWeighbridgeModal(lot)}
-                                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 shadow-2xs transition-colors flex items-center gap-1"
-                                          title="Supervisor Clearance Weighbridge Override"
+                                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg border border-slate-200 shadow-2xs transition-colors flex items-center gap-1 cursor-pointer"
+                                          title="Supervisor Weighbridge Scale Entry"
                                         >
                                           <Scale className="w-3.5 h-3.5 text-slate-600" />
-                                          <span className="hidden sm:inline">Override</span>
+                                          <span className="hidden sm:inline">Weigh Scale</span>
                                         </button>
 
                                         <button

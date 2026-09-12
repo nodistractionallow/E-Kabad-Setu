@@ -21,7 +21,7 @@ import {
   getSyncQueue,
   mapSupabaseRowToLot,
 } from '../services/syncService';
-import { updateLotInSqlite } from '../lib/sqliteClient';
+import { updateLotInSqlite, saveLotToSqlite, fetchSqliteLots } from '../lib/sqliteClient';
 
 interface AppContextType {
   currentView: UserRole;
@@ -250,6 +250,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
+  // Hydrate from SQLite database backend on boot
+  useEffect(() => {
+    fetchSqliteLots()
+      .then((sqliteLots) => {
+        if (sqliteLots && Array.isArray(sqliteLots) && sqliteLots.length > 0) {
+          setLots((prev) => {
+            const map = new Map<string, EWasteLot>();
+            sqliteLots.forEach((l) => map.set(l.id.toUpperCase(), l));
+            prev.forEach((l) => {
+              const key = l.id.toUpperCase();
+              if (!map.has(key)) {
+                map.set(key, l);
+              } else {
+                const existing = map.get(key)!;
+                if (l.status === 'paid' && existing.status !== 'paid') {
+                  map.set(key, { ...existing, ...l, status: 'paid' });
+                }
+              }
+            });
+            const merged = Array.from(map.values());
+            merged.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+            try {
+              localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(merged));
+            } catch (e) {
+              console.warn(e);
+            }
+            return merged;
+          });
+        }
+      })
+      .catch(console.warn);
+  }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.ONLINE, JSON.stringify(isOnline));
@@ -318,22 +351,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
           });
 
-          // Retain any locally paid lots that might not yet be present in the Firestore snapshot
-          Object.keys(paidMap).forEach((idKey) => {
-            const p = paidMap[idKey];
-            if (p && p.id && !loadedLots.some((l) => l.id.toUpperCase() === idKey.toUpperCase())) {
-              loadedLots.unshift(p as EWasteLot);
+          // Retain any locally created or paid lots that might not yet be present in the Firestore snapshot
+          setLots((prevLots) => {
+            const merged = [...loadedLots];
+            prevLots.forEach((pLot) => {
+              if (!merged.some((m) => m.id.toUpperCase() === pLot.id.toUpperCase())) {
+                merged.unshift(pLot);
+              }
+            });
+            Object.keys(paidMap).forEach((idKey) => {
+              const p = paidMap[idKey];
+              if (p && p.id && !merged.some((m) => m.id.toUpperCase() === idKey.toUpperCase())) {
+                merged.unshift(p as EWasteLot);
+              }
+            });
+            merged.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+            try {
+              localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(merged));
+            } catch (e) {
+              console.warn(e);
             }
+            return merged;
           });
-
-          // Sort by creation or natural descending order
-          loadedLots.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-          setLots(loadedLots);
-          try {
-            localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(loadedLots));
-          } catch (e) {
-            console.warn(e);
-          }
           setIsFirebaseSyncing(false);
         } else if (!hasInitializedFirebase.current) {
           // Initialize Firestore with default mock lots if remote database is blank
@@ -470,7 +509,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // Update local state immediately for snappy UI
-    setLots((prev) => [newLot, ...prev]);
+    setLots((prev) => {
+      const next = [newLot, ...prev.filter(l => l.id.toUpperCase() !== newLot.id.toUpperCase())];
+      try {
+        localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(next));
+      } catch (e) {
+        console.warn(e);
+      }
+      return next;
+    });
     setActiveCreatedLot(newLot);
 
     const updatedCollector: CollectorProfile = {
@@ -480,11 +527,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       bagsDepositedKg: Math.min(collector.targetBagsKg, Number((collector.bagsDepositedKg + (newLot.hazardFlag ? newLot.weightKg : 0)).toFixed(1)))
     };
     setCollector(updatedCollector);
+    try {
+      localStorage.setItem(STORAGE_KEYS.COLLECTOR, JSON.stringify(updatedCollector));
+    } catch (e) {
+      console.warn(e);
+    }
+
+    // Persist immediately to SQLite database backend
+    try {
+      await saveLotToSqlite(newLot);
+    } catch (err) {
+      console.warn('SQLite lot creation save error:', err);
+    }
 
     // Persist asynchronously to Firebase Firestore for cross-device sync
     try {
       const lotRef = doc(db, 'lots', newLot.id);
-      await setDoc(lotRef, newLot);
+      await setDoc(lotRef, newLot, { merge: true });
 
       const collectorRef = doc(db, 'collectors', collector.id);
       await setDoc(collectorRef, updatedCollector, { merge: true });
@@ -536,7 +595,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       eprCreditKg: weighbridgeWeightKg,
       paidAt: nowIso,
       paidTimestamp: nowMs,
-      settlementUtr: utr
+      settlementUtr: utr,
+      anomalyFlag: false,
+      anomalyCleared: true,
+      anomalyResolution: 'Supervisor Weighbridge Clearance Override Authorized'
     };
 
     // 1. Immediately store in persistent PAID_LOTS map in localStorage
@@ -544,6 +606,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const raw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
       const map: Record<string, Partial<EWasteLot>> = raw ? JSON.parse(raw) : {};
       map[cleanId.toUpperCase()] = updatedPaidLot;
+      map[cleanId.toLowerCase()] = updatedPaidLot;
       map[cleanId] = updatedPaidLot;
       localStorage.setItem(STORAGE_KEYS.PAID_LOTS, JSON.stringify(map));
     } catch (e) {
@@ -626,35 +689,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const rejectLot = async (lotId: string, reason: string): Promise<void> => {
+    const cleanId = (lotId || '').trim();
     let updatedLot: EWasteLot | undefined;
-    setLots((prev) =>
-      prev.map((lot) => {
-        if (lot.id === lotId) {
+
+    setLots((prev) => {
+      const nextLots = prev.map((lot) => {
+        if (lot.id.toUpperCase() === cleanId.toUpperCase()) {
           updatedLot = {
             ...lot,
             status: 'rejected',
             anomalyFlag: true,
-            anomalyReason: reason
+            anomalyReason: reason,
+            rejectionReason: reason
           };
           return updatedLot;
         }
         return lot;
-      })
-    );
-
-    try {
-      const lotRef = doc(db, 'lots', lotId);
-      await updateDoc(lotRef, {
-        status: 'rejected',
-        anomalyFlag: true,
-        anomalyReason: reason
       });
+      try {
+        localStorage.setItem(STORAGE_KEYS.LOTS, JSON.stringify(nextLots));
+      } catch (e) {
+        console.warn(e);
+      }
+      return nextLots;
+    });
+
+    // Remove from PAID_LOTS cache if present
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.PAID_LOTS);
+      if (raw) {
+        const map = JSON.parse(raw);
+        delete map[cleanId];
+        delete map[cleanId.toUpperCase()];
+        delete map[cleanId.toLowerCase()];
+        localStorage.setItem(STORAGE_KEYS.PAID_LOTS, JSON.stringify(map));
+      }
+    } catch (e) {
+      console.warn('Failed to clear PAID_LOTS on reject:', e);
+    }
+
+    // Save to SQLite
+    if (updatedLot) {
+      try {
+        await updateLotInSqlite(cleanId, updatedLot);
+      } catch (sqlErr) {
+        console.warn('SQLite rejectLot error:', sqlErr);
+      }
+    }
+
+    // Save to Firestore with setDoc merge: true
+    try {
+      const lotRef = doc(db, 'lots', cleanId);
+      if (updatedLot) {
+        await setDoc(lotRef, updatedLot, { merge: true });
+      } else {
+        await setDoc(lotRef, {
+          id: cleanId,
+          status: 'rejected',
+          anomalyFlag: true,
+          anomalyReason: reason,
+          rejectionReason: reason
+        }, { merge: true });
+      }
     } catch (err) {
       console.warn('Firestore rejectLot error, cached locally:', err);
     }
 
     if (updatedLot) {
-      enqueueSyncAction('lots', 'update', lotId, updatedLot);
+      enqueueSyncAction('lots', 'update', cleanId, updatedLot);
       setPendingSyncCount(getSyncQueue().length);
     }
 

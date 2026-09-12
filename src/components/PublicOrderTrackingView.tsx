@@ -20,7 +20,9 @@ import {
   RefreshCw, 
   Zap, 
   CheckCheck,
-  Globe
+  Globe,
+  Ban,
+  X
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { EWasteLot } from '../types';
@@ -43,7 +45,7 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
   lot,
   onBackToApp
 }) => {
-  const { lots, currentView, approveAndPayLot } = useApp();
+  const { lots, currentView, approveAndPayLot, rejectLot } = useApp();
   const [copied, setCopied] = useState(false);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [isRealtimeActive, setIsRealtimeActive] = useState(false);
@@ -402,6 +404,34 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
     }
   };
 
+  const [isRejecting, setIsRejecting] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectionReasonInput, setRejectionReasonInput] = useState('Consignment cancelled by collector / rejected during inward review');
+
+  const handleConfirmReject = async () => {
+    if (!displayLot.id) return;
+    setIsRejecting(true);
+    try {
+      const cleanId = displayLot.id.trim();
+      const updatedLot: EWasteLot = {
+        ...displayLot,
+        status: 'rejected',
+        anomalyFlag: true,
+        anomalyReason: rejectionReasonInput,
+        rejectionReason: rejectionReasonInput
+      };
+      setCurrentLot(updatedLot);
+      previousStatusRef.current = 'rejected';
+      await rejectLot(cleanId, rejectionReasonInput);
+      setShowRejectModal(false);
+      playFeedbackChime('warning');
+    } catch (err) {
+      console.error('Error rejecting consignment:', err);
+    } finally {
+      setIsRejecting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-16 animate-fadeIn">
       {/* Top MoEFCC Statutory Header Bar */}
@@ -612,12 +642,12 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
                   </span>
                 </div>
 
-                <div className="flex flex-col justify-end">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2">
                   <button
                     type="button"
-                    disabled={isDisbursing}
+                    disabled={isDisbursing || isRejecting}
                     onClick={handleAuthorityDisburse}
-                    className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-60"
+                    className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-60"
                   >
                     {isDisbursing ? (
                       <>
@@ -632,6 +662,16 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
                         </span>
                       </>
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isDisbursing || isRejecting}
+                    onClick={() => setShowRejectModal(true)}
+                    className="py-2.5 px-3.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 border border-rose-200 transition-colors cursor-pointer"
+                    title="Reject / Cancel Consignment"
+                  >
+                    <Ban className="w-4 h-4 text-rose-600" />
+                    <span>Reject Lot</span>
                   </button>
                 </div>
               </div>
@@ -689,9 +729,19 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
                   </div>
                 </div>
               </div>
-              <div className="px-4 py-2 bg-white border border-amber-200 rounded-2xl text-right shrink-0">
+              <div className="px-4 py-2 bg-white border border-amber-200 rounded-2xl text-right shrink-0 flex flex-col items-end">
                 <div className="text-[10px] font-mono uppercase text-slate-400">Payment Status</div>
                 <div className="text-xs font-mono font-black text-amber-600">PENDING WEIGHBRIDGE</div>
+                {isScrapCollector && (
+                  <button
+                    type="button"
+                    onClick={() => setShowRejectModal(true)}
+                    className="mt-2 text-[10px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-1 rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+                  >
+                    <Ban className="w-3 h-3 text-rose-600" />
+                    <span>Cancel Lot</span>
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -929,6 +979,64 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
             </p>
           </div>
         </div>
+
+        {/* Consignment Rejection Modal */}
+        {showRejectModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-white rounded-3xl max-w-md w-full p-5 shadow-2xl border border-rose-200 space-y-4 animate-scaleUp">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                    <Ban className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-extrabold text-slate-900">Cancel & Reject Consignment</h4>
+                    <p className="text-[10px] font-mono text-slate-500">Manifest #{displayLot.id}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRejectModal(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Reason for Consignment Rejection:
+                </label>
+                <textarea
+                  value={rejectionReasonInput}
+                  onChange={(e) => setRejectionReasonInput(e.target.value)}
+                  rows={3}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none focus:border-rose-400 font-sans"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowRejectModal(false)}
+                  disabled={isRejecting}
+                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Keep Active
+                </button>
+                <button
+                  type="button"
+                  disabled={isRejecting || !rejectionReasonInput.trim()}
+                  onClick={handleConfirmReject}
+                  className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                  <span>{isRejecting ? 'Rejecting...' : 'Confirm Reject'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </main>
     </div>
