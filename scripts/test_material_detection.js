@@ -203,6 +203,44 @@ async function runTests() {
   assert((pcbResult.confidenceScore || 0) >= 70, `Confidence score >= 70% (${pcbResult.confidenceScore}%)`);
   assert(pcbResult.suggestedRatePerKg === 480, 'Statutory Mandi price matched to ₹480/kg');
 
+  // TEST 6: Cables & Wires Classification (Red & Black Wire Coils like User Image 1)
+  const wireCanvas = new MockCanvas();
+  wireCanvas.ctx.fillStyle = '#1e293b'; // Background
+  wireCanvas.ctx.fillRect(0, 0, 320, 240);
+  // Red insulated wires
+  wireCanvas.ctx.fillStyle = '#dc2626';
+  for (let i = 0; i < 12; i++) {
+    wireCanvas.ctx.fillRect(40, 30 + i * 16, 240, 7);
+  }
+  // Black insulated wires
+  wireCanvas.ctx.fillStyle = '#0f172a';
+  for (let i = 0; i < 12; i++) {
+    wireCanvas.ctx.fillRect(40, 37 + i * 16, 240, 6);
+  }
+
+  const wireResult = await service.detectMaterial(wireCanvas);
+  assert(wireResult.success === true, 'Coiled wire image passes detection successfully');
+  assert(wireResult.predictedCategory === 'Cables / Wires', 'Identified as Cables / Wires (like User Image 1)');
+  assert((wireResult.confidenceScore || 0) >= 70, `Confidence score >= 70% (${wireResult.confidenceScore}%)`);
+  assert(wireResult.suggestedRatePerKg === 720, 'Statutory Mandi price matched to ₹720/kg for copper wire');
+
+  // TEST 7: Molded Plastic Scrap Classification (Earbud case like User Image 2)
+  const plasticCanvas = new MockCanvas();
+  plasticCanvas.ctx.fillStyle = '#475569'; // Background
+  plasticCanvas.ctx.fillRect(0, 0, 320, 240);
+  // Light cyan/grey molded casing
+  plasticCanvas.ctx.fillStyle = '#bae6fd';
+  plasticCanvas.ctx.ellipse(160, 120, 80, 55);
+  // Center seam line
+  plasticCanvas.ctx.fillStyle = '#64748b';
+  plasticCanvas.ctx.fillRect(110, 118, 100, 2);
+
+  const plasticResult = await service.detectMaterial(plasticCanvas);
+  assert(plasticResult.success === true, 'Plastic case passes detection successfully');
+  assert(plasticResult.predictedCategory === 'Plastic (Mixed)', 'Identified as Plastic (Mixed) (like User Image 2)');
+  assert((plasticResult.confidenceScore || 0) >= 70, `Confidence score >= 70% (${plasticResult.confidenceScore}%)`);
+  assert(plasticResult.suggestedRatePerKg === 65, 'Statutory Mandi price matched to ₹65/kg for e-plastic');
+
   console.log(`\n=== RESULTS: ${passedCount} / ${totalTests} TESTS PASSED ===\n`);
   if (passedCount === totalTests) {
     process.exit(0);

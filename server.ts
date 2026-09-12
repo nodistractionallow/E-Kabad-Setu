@@ -69,14 +69,14 @@ app.post("/api/ai/classify-material", async (req, res) => {
 
       const prompt = `You are the world's leading CPCB (Central Pollution Control Board, India) certified E-Waste Auditor, Material Science Classifier, and Computer Vision System assisting informal scrap collectors (Kabadiwalas) and certified recycling units in India under E-Waste Management Rules 2022.
 
-CRITICAL FIRST STEP: COMPREHENSIVE FAKE & NON-SCRAP VERIFICATION
+CRITICAL FIRST STEP: RECOGNIZE ELECTRONIC WASTE & ARTIFACTS
 Carefully analyze the image:
-1. Is this a fake image? (e.g. a photo taken of another smartphone/laptop screen displaying an image, a printed photo on paper, a 3D cartoon/CGI rendering, an AI generated synthetic mock image, a blurry unidentifiable mess, or completely black/blank image).
-2. Is this non-electronic waste? (e.g. a human face, selfie, portrait of a person, animal, pet, food, clothes, nature, scenery, car, bike, furniture, paper, wood, stones, or ordinary household trash).
+1. Is there electronic waste, hardware, cables, casings, batteries, circuit boards, screens, or dismantled devices present? Even if held in human hands, sitting on a desk, or shown during a demonstration, CLASSIFY THE ELECTRONIC ITEM.
+2. Only reject as non-e-waste if there is ABSOLUTELY NO electronic equipment, hardware, wiring, or casing present (e.g. purely a human face/selfie portrait with no e-waste, animals, food, clothing, paper, wood, stones, or blank background).
 
-IF FAKE, SCREEN CAPTURE, OR NOT GENUINE E-WASTE:
+IF PURELY NON-E-WASTE (HUMAN SELFIE, FOOD, NATURE WITH ZERO ELECTRONICS):
 You MUST set "isEWaste": false.
-Specify exactly what was detected in "detectedObject" (e.g. "Screen capture of another device / Fake photo", "Human portrait / Selfie", "Household organic waste", "Paper / Wood").
+Specify exactly what was detected in "detectedObject" (e.g. "Human portrait / Selfie", "Household organic waste", "Paper / Wood").
 Explain clearly why it cannot be accepted.
 Return strictly this JSON:
 {

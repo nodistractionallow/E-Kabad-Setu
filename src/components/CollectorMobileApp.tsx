@@ -116,22 +116,71 @@ export const CollectorMobileApp: React.FC = () => {
     isOtherEwaste?: boolean; // true = price not defined, factory decides
   } | null>(null);
 
-  // Derived: is the current detected category "Other E-waste" (price undefined)?
-  const isOtherEwasteCategory =
-    aiResult?.isOtherEwaste === true ||
-    customCategoryName === 'Other E-waste' ||
-    (detectionResult?.predictedCategory === 'Other E-waste');
+  // Derived: is the current active/detected category "Other E-waste" (price undefined)?
+  // User's manual selection takes immediate precedence over detectionResult
+  const effectiveCategory = customCategoryName || detectionResult?.predictedCategory || 'Other E-waste';
+  const isOtherEwasteCategory = effectiveCategory === 'Other E-waste';
 
   const selectedMaterial = materials.find((m) => m.id === selectedMaterialId) || materials[0];
   // For Other E-waste, rate is always 0 (TBD), so total is 0
   const currentRate = isOtherEwasteCategory ? 0 : (customRateOverride ?? (aiResult?.estimatedRatePerKg || selectedMaterial.pricePerKg));
-  const calculatedTotal = isOtherEwasteCategory ? 0 : Math.round(customWeight * (aiResult?.isEWaste === false ? 0 : currentRate));
+  const calculatedTotal = isOtherEwasteCategory ? 0 : Math.round(customWeight * (aiResult?.isEWaste === false && !customCategoryName ? 0 : currentRate));
 
-  const triggerLiveAiClassification = async (base64OrUrl: string) => {
+  // Centralized Category Selector: Updates rates, CRM yields, hazard flags & speech
+  const selectCategory = (chosen: string) => {
+    playFeedbackChime('beep');
+    setCustomCategoryName(chosen);
+    const isOther = chosen === 'Other E-waste';
+
+    const matched = materials.find((m) => {
+      const catSlug = m.category.toLowerCase();
+      if (chosen === 'PCB / Circuit Board') return catSlug === 'pcb';
+      if (chosen === 'Cables / Wires') return catSlug === 'copper';
+      if (chosen === 'Battery') return catSlug === 'battery';
+      if (chosen === 'Motor / Magnet Assembly') return catSlug === 'magnet';
+      if (chosen === 'Plastic (Mixed)') return catSlug === 'plastic';
+      if (chosen === 'CRT / Monitor') return catSlug === 'crt';
+      if (chosen === 'LCD / Screen') return catSlug === 'lcd';
+      return catSlug === 'other_ewaste' || catSlug === 'mixed';
+    });
+
+    if (matched && !isOther) {
+      setSelectedMaterialId(matched.id);
+      setCustomRateOverride(matched.pricePerKg);
+    } else {
+      setCustomRateOverride(null);
+    }
+
+    setAiResult((prev) => ({
+      isEWaste: true,
+      detectedCategory: chosen,
+      confidenceScore: prev?.confidenceScore && prev.confidenceScore > 50 ? prev.confidenceScore : 95,
+      estimatedRatePerKg: isOther ? 0 : (matched?.pricePerKg || 120),
+      suggestedWeightKg: customWeight,
+      criticalMaterials: matched?.crmYield ? Object.keys(matched.crmYield).filter(k => (matched.crmYield as any)[k] > 0) : [],
+      hazardLevel: matched?.hazardLevel || 'safe',
+      hazardWarning: language === 'hi' ? matched?.hazardWarning_hi || '' : matched?.hazardWarning_en || '',
+      safeAction: language === 'hi' ? matched?.safeAction_hi || '' : matched?.safeAction_en || '',
+      recommendedRecycler: prev?.recommendedRecycler || 'EcoMetals CPCB Authorized Unit #4',
+      isOtherEwaste: isOther
+    }));
+
+    if (detectionResult) {
+      setDetectionResult((prev) => prev ? {
+        ...prev,
+        status: 'valid_material',
+        predictedCategory: chosen as any,
+        isAutoClassifiedOther: isOther,
+        suggestedRatePerKg: isOther ? 0 : (matched?.pricePerKg || 120)
+      } : null);
+    }
+  };
+
+  const triggerLiveAiClassification = async (base64OrUrl: string, options?: { bypassQualityGate?: boolean }) => {
     setIsAiClassifying(true);
     try {
       // Run 100% on-device AI Material Detection (Quality Gate + Classifier)
-      const result = await materialDetectionService.detectMaterial(base64OrUrl);
+      const result = await materialDetectionService.detectMaterial(base64OrUrl, options);
       setDetectionResult(result);
 
       if (result.status === 'rejected_quality') {
@@ -153,47 +202,10 @@ export const CollectorMobileApp: React.FC = () => {
         return;
       }
 
-      // result.status === 'valid_material' (>= 70% OR auto Other E-waste)
+      // result.status === 'valid_material'
       playFeedbackChime('beep');
-      const categoryName = result.predictedCategory!;
-      const isOtherEwaste = categoryName === 'Other E-waste';
-      setCustomCategoryName(categoryName);
-
-      // Auto match category to materials list if possible
-      const matched = materials.find((m) => {
-        const catSlug = m.category.toLowerCase();
-        if (categoryName === 'PCB / Circuit Board') return catSlug === 'pcb';
-        if (categoryName === 'Cables / Wires') return catSlug === 'copper';
-        if (categoryName === 'Battery') return catSlug === 'battery';
-        if (categoryName === 'Motor / Magnet Assembly') return catSlug === 'magnet';
-        if (categoryName === 'Plastic (Mixed)') return catSlug === 'plastic';
-        if (categoryName === 'CRT / Monitor') return catSlug === 'crt';
-        if (categoryName === 'LCD / Screen') return catSlug === 'lcd';
-        return catSlug === 'other_ewaste' || catSlug === 'mixed';
-      });
-
-      if (matched) {
-        setSelectedMaterialId(matched.id);
-      }
-      if (!isOtherEwaste && result.suggestedRatePerKg) {
-        setCustomRateOverride(result.suggestedRatePerKg);
-      } else {
-        setCustomRateOverride(null); // Other E-waste: no rate override
-      }
-      
-      setAiResult({
-        isEWaste: true,
-        detectedCategory: categoryName,
-        confidenceScore: result.confidenceScore || 85,
-        estimatedRatePerKg: isOtherEwaste ? 0 : (result.suggestedRatePerKg || selectedMaterial.pricePerKg),
-        suggestedWeightKg: 2.5,
-        criticalMaterials: [],
-        hazardLevel: result.hazardLevel || 'safe',
-        hazardWarning: language === 'hi' ? result.hazardWarningHi || '' : result.hazardWarningEn || '',
-        safeAction: language === 'hi' ? result.safeActionHi || '' : result.safeActionEn || '',
-        recommendedRecycler: 'EcoMetals CPCB Authorized Unit #4',
-        isOtherEwaste
-      });
+      const categoryName = result.predictedCategory || 'Other E-waste';
+      selectCategory(categoryName);
 
       const speakMsg = language === 'hi' ? result.userMessageHi : result.userMessageEn;
       speak(speakMsg);
@@ -887,7 +899,21 @@ export const CollectorMobileApp: React.FC = () => {
                         {detectionResult.userMessageHi}
                       </div>
                       <div className="text-[11px] text-amber-400/80 font-mono mt-1.5">
-                        Edge Sharpness: {detectionResult.qualityMetrics?.blurScore ?? 18} (Required ≥ 45)
+                        Edge Sharpness: {detectionResult.qualityMetrics?.blurScore ?? 18} (Required ≥ 22)
+                      </div>
+                      <div className="mt-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (livePhoto) {
+                              triggerLiveAiClassification(livePhoto, { bypassQualityGate: true });
+                            }
+                          }}
+                          className="px-3.5 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
+                        >
+                          <Zap className="w-3.5 h-3.5 fill-current" />
+                          <span>{language === 'hi' ? 'फिर भी स्कैन करें' : 'Scan Photo Anyway'}</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -902,7 +928,7 @@ export const CollectorMobileApp: React.FC = () => {
                     <div className="flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[11px] font-mono text-rose-300 font-bold uppercase tracking-wider">
-                          {language === 'hi' ? '⚠️ अस्वीकृत: मानव चेहरा पाया गया' : '⚠️ REJECTED: HUMAN FACE DETECTED'}
+                          {language === 'hi' ? '⚠️ चेतावनी: मानव चेहरा पाया गया' : '⚠️ NOTICE: HUMAN FACE DETECTED'}
                         </span>
                         <button
                           type="button"
@@ -923,7 +949,21 @@ export const CollectorMobileApp: React.FC = () => {
                         {detectionResult.userMessageHi}
                       </div>
                       <div className="text-[11px] text-rose-300/80 mt-1 font-semibold">
-                        {language === 'hi' ? 'गोपनीयता नियम: कृपया केवल स्क्रैप हार्डवेयर का फोटो लें।' : 'Privacy rule: Please frame electronic scrap hardware only.'}
+                        {language === 'hi' ? 'गोपनीयता नियम: यदि आप कबाड़ पकड़े हुए हैं, तो नीचे बटन दबाकर स्कैन पूरा करें।' : 'Privacy rule: If you are holding scrap in front of camera, proceed below.'}
+                      </div>
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (livePhoto) {
+                              triggerLiveAiClassification(livePhoto, { bypassQualityGate: true });
+                            }
+                          }}
+                          className="px-3.5 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
+                        >
+                          <Zap className="w-3.5 h-3.5 fill-current" />
+                          <span>{language === 'hi' ? 'यह कबाड़ है — स्कैन जारी रखें' : 'Scan Scrap Hardware Anyway'}</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -960,6 +1000,20 @@ export const CollectorMobileApp: React.FC = () => {
                       </div>
                       <div className="text-[11px] text-slate-400 mt-1">
                         {language === 'hi' ? 'खाली सतह या दीवार की फोटो अस्वीकृत की जाती है।' : 'Flat empty surface or background detected. Please focus on scrap.'}
+                      </div>
+                      <div className="mt-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (livePhoto) {
+                              triggerLiveAiClassification(livePhoto, { bypassQualityGate: true });
+                            }
+                          }}
+                          className="px-3.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
+                        >
+                          <Zap className="w-3.5 h-3.5 fill-current" />
+                          <span>{language === 'hi' ? 'कबाड़ का विश्लेषण करें' : 'Analyze Scrap Anyway'}</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1096,6 +1150,41 @@ export const CollectorMobileApp: React.FC = () => {
                     )}
                   </div>
 
+                  {/* 1-Tap Category Quick Chips */}
+                  <div>
+                    <label className="text-[11px] text-slate-500 font-medium block mb-1.5">
+                      {language === 'hi' ? '⚡ 1-टैप त्वरित श्रेणी चुनें:' : language === 'mr' ? '⚡ 1-टॅप जलद प्रवर्ग निवडा:' : '⚡ 1-Tap Quick Select:'}
+                    </label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {STRICT_SCRAP_CATEGORIES.map((cat) => {
+                        const isSelected = (customCategoryName || detectionResult?.predictedCategory) === cat;
+                        const icon = cat === 'Cables / Wires' ? '🔌'
+                          : cat === 'PCB / Circuit Board' ? '🟢'
+                          : cat === 'Battery' ? '🔋'
+                          : cat === 'Plastic (Mixed)' ? '🧴'
+                          : cat === 'Motor / Magnet Assembly' ? '⚙️'
+                          : cat === 'LCD / Screen' ? '📱'
+                          : cat === 'CRT / Monitor' ? '📺'
+                          : '📦';
+                        return (
+                          <button
+                            key={cat}
+                            type="button"
+                            onClick={() => selectCategory(cat)}
+                            className={`px-2 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer text-left border ${
+                              isSelected
+                                ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs ring-1 ring-emerald-500'
+                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                            }`}
+                          >
+                            <span className="shrink-0">{icon}</span>
+                            <span className="truncate">{cat.replace(' / ', '/')}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   {/* Dropdown: collector can override with a different standard category */}
                   <div>
                     <label className="text-[11px] text-slate-500 font-medium block mb-1">
@@ -1104,26 +1193,8 @@ export const CollectorMobileApp: React.FC = () => {
                     <select
                       value={customCategoryName || ''}
                       onChange={(e) => {
-                        playFeedbackChime('beep');
-                        const chosen = e.target.value;
-                        setCustomCategoryName(chosen);
-                        // Find matching material for rate
-                        const found = materials.find(m => {
-                          const s = m.category.toLowerCase();
-                          if (chosen === 'PCB / Circuit Board') return s === 'pcb';
-                          if (chosen === 'Cables / Wires') return s === 'copper';
-                          if (chosen === 'Battery') return s === 'battery';
-                          if (chosen === 'Motor / Magnet Assembly') return s === 'magnet';
-                          if (chosen === 'Plastic (Mixed)') return s === 'plastic';
-                          if (chosen === 'CRT / Monitor') return s === 'crt';
-                          if (chosen === 'LCD / Screen') return s === 'lcd';
-                          return false;
-                        });
-                        if (found && chosen !== 'Other E-waste') {
-                          setSelectedMaterialId(found.id);
-                          setCustomRateOverride(found.pricePerKg);
-                        } else {
-                          setCustomRateOverride(null);
+                        if (e.target.value) {
+                          selectCategory(e.target.value);
                         }
                       }}
                       className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold text-slate-700 cursor-pointer focus:outline-none focus:border-emerald-500"
@@ -1164,8 +1235,13 @@ export const CollectorMobileApp: React.FC = () => {
                       min={0.5}
                       max={500}
                       step={0.5}
-                      onChange={(e) => setCustomWeight(Math.max(0.5, parseFloat(e.target.value) || 0.5))}
-                      className="flex-1 bg-slate-50 border-2 border-slate-300 focus:border-emerald-600 focus:bg-white rounded-xl px-3 py-2.5 text-center text-lg font-mono font-bold text-slate-900 focus:outline-none"
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (!isNaN(val) && val >= 0.1) {
+                          setCustomWeight(val);
+                        }
+                      }}
+                      className="flex-1 text-center font-mono font-black text-2xl bg-slate-50 border border-slate-300 rounded-xl py-2 text-slate-900 focus:outline-none focus:border-emerald-500"
                     />
                     <button
                       type="button"
@@ -1178,40 +1254,33 @@ export const CollectorMobileApp: React.FC = () => {
                       +
                     </button>
                   </div>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="100"
-                    step="0.5"
-                    value={customWeight}
-                    onChange={(e) => setCustomWeight(parseFloat(e.target.value))}
-                    className="w-full accent-emerald-600 cursor-pointer h-1.5 bg-slate-200 rounded-lg"
-                  />
                 </div>
 
-                {/* BLOCK 3: TOTAL VALUATION */}
+                {/* BLOCK 3: LIVE CPCB RATE & VALUATION CARD */}
                 {isOtherEwasteCategory ? (
-                  <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-5 shadow-xs">
-                    <div className="flex items-center gap-2 mb-2">
-                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-                      <span className="text-sm font-extrabold text-amber-900 uppercase tracking-wide">
-                        {language === 'hi' ? 'मूल्य: निर्धारित नहीं' : language === 'mr' ? 'किंमत: निश्चित नाही' : 'Price: Not Defined'}
-                      </span>
+                  <div className="bg-amber-50/80 border-2 border-dashed border-amber-300 rounded-2xl p-4 space-y-2">
+                    <div className="flex items-start gap-2.5">
+                      <HelpCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="text-sm font-extrabold text-amber-900">
+                          {language === 'hi' ? 'मूल्यांकन: कारखाना तय करेगा' : language === 'mr' ? 'मूल्यांकन: कारखाना ठरवेल' : 'Valuation: Factory Decides'}
+                        </div>
+                        <div className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+                          {language === 'hi'
+                            ? 'इस वस्तु का भाव फैक्ट्री द्वारा भौतिक जांच व धातु परीक्षण के बाद अंतिम बिल में जोड़ा जाएगा।'
+                            : language === 'mr'
+                            ? 'या वस्तूचे दर कारखान्याद्वारे प्रत्यक्ष तपासणीनंतर अंतिम बिलात जोडले जातील.'
+                            : 'Rate will be finalized by the recycling factory after physical assaying. It will be credited in your settlement invoice.'}
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-xs text-amber-800 font-semibold leading-snug">
-                      {language === 'hi'
-                        ? 'कारखाना वजन तौलने के बाद अंतिम भाव तय करेगा। लॉट सेव करें और रिसाइक्लर के पास जाएं।'
-                        : language === 'mr'
-                        ? 'कारखाना वजन केल्यानंतर अंतिम दर ठरवेल. लॉट सेव्ह करा आणि रिसायकलरकडे जा.'
-                        : 'Factory will determine final rate after weighbridge verification. Save lot and proceed to recycler.'}
-                    </p>
-                    <div className="mt-3 flex items-center gap-2 text-xs font-mono text-amber-700">
-                      <span className="font-bold">{language === 'hi' ? 'घोषित वजन:' : 'Declared Weight:'}</span>
-                      <span className="bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-black">{customWeight} kg</span>
+                    <div className="flex justify-between items-center pt-2 border-t border-amber-200 text-xs text-amber-800 font-mono">
+                      <span>{t.unitRate}: <strong>₹0 (TBD)</strong></span>
+                      <span>{t.totalValue}: <strong>₹0</strong></span>
                     </div>
                   </div>
                 ) : (
-                  <div className="bg-gradient-to-br from-emerald-50 to-white border-2 border-emerald-300 rounded-2xl p-4 flex items-center justify-between shadow-xs">
+                  <div className="bg-linear-to-r from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-2xl p-4 flex items-center justify-between">
                     <div>
                       <div className="text-xs font-mono text-slate-500 font-bold uppercase">{t.unitRate}</div>
                       <div className="text-sm font-bold text-slate-800">₹{currentRate} / kg</div>
@@ -1229,11 +1298,11 @@ export const CollectorMobileApp: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleSaveLot}
-                  disabled={!livePhoto || aiResult?.isEWaste === false}
+                  disabled={!livePhoto || (aiResult?.isEWaste === false && !customCategoryName)}
                   className={`w-full py-4 font-extrabold rounded-xl flex items-center justify-center gap-2.5 shadow-md transition-all cursor-pointer ${
                     !livePhoto
                       ? 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed shadow-none'
-                      : aiResult?.isEWaste === false
+                      : (aiResult?.isEWaste === false && !customCategoryName)
                       ? 'bg-rose-100 text-rose-400 border border-rose-200 cursor-not-allowed shadow-none'
                       : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white shadow-emerald-700/25'
                   }`}
@@ -1245,7 +1314,7 @@ export const CollectorMobileApp: React.FC = () => {
                         {language === 'hi' ? '📸 पहले लाइव फोटो खींचें' : language === 'mr' ? '📸 आधी फोटो काढा' : '📸 Snap Live Photo First'}
                       </span>
                     </>
-                  ) : aiResult?.isEWaste === false ? (
+                  ) : (aiResult?.isEWaste === false && !customCategoryName) ? (
                     <>
                       <AlertCircle className="w-5 h-5 text-rose-500" />
                       <span className="text-sm">
