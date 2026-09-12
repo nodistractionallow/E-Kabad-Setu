@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, RefreshCw, FlipHorizontal, AlertCircle, Sparkles } from 'lucide-react';
+import { Camera, RefreshCw, FlipHorizontal, AlertCircle, Sparkles, Upload } from 'lucide-react';
 import { playFeedbackChime } from '../utils/speech';
 
 interface LiveCameraViewfinderProps {
@@ -24,6 +24,7 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Initialize camera stream directly from user media without any file/folder pickers
   const startCamera = useCallback(async () => {
@@ -242,14 +243,43 @@ export const LiveCameraViewfinder: React.FC<LiveCameraViewfinderProps> = ({
               </div>
             </div>
 
-            {/* Bottom Shutter Capture Button */}
-            <div className="relative z-10 pb-4 flex items-center justify-center">
+            {/* Bottom Shutter Capture & Upload Buttons */}
+            <div className="relative z-10 pb-4 px-4 flex items-center justify-center gap-3">
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      if (typeof reader.result === 'string') {
+                        playFeedbackChime('beep');
+                        onPhotoCaptured(reader.result);
+                      }
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+              />
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="p-3 bg-slate-900/90 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-full shadow-lg transition-transform active:scale-95 cursor-pointer flex items-center justify-center"
+                title={language === 'hi' ? 'गैलरी से फोटो अपलोड करें' : 'Upload photo from device'}
+              >
+                <Upload className="w-4 h-4 text-emerald-400" />
+              </button>
+
               <button
                 type="button"
                 onClick={captureFrame}
-                className="group flex items-center gap-2.5 px-7 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black rounded-full text-xs shadow-xl shadow-emerald-950/70 border-2 border-white/60 transition-all cursor-pointer"
+                className="group flex items-center gap-2.5 px-6 py-3 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black rounded-full text-xs shadow-xl shadow-emerald-950/70 border-2 border-white/60 transition-all cursor-pointer"
               >
-                <div className="w-4 h-4 rounded-full bg-white group-hover:scale-110 transition-transform"></div>
+                <div className="w-3.5 h-3.5 rounded-full bg-white group-hover:scale-110 transition-transform"></div>
                 <Camera className="w-4 h-4 text-white" />
                 <span>
                   {language === 'hi' ? 'फोटो खींचें (Capture)' : language === 'mr' ? 'फोटो घ्या (Capture)' : 'Click Photo & Analyze'}

@@ -1,0 +1,8 @@
+0 PCB / Circuit Board
+1 Cables / Wires
+2 Battery
+3 Motor / Magnet Assembly
+4 Plastic (Mixed)
+5 CRT / Monitor
+6 LCD / Screen
+7 Other E-waste

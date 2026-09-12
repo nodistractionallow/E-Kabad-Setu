@@ -117,6 +117,45 @@ export const INITIAL_MATERIALS: MaterialItem[] = [
     audioText_mr: 'ई-प्लास्टिकचा आजचा दर 65 रुपये प्रति किलो आहे.',
     audioText_en: 'Shredded electronic plastic scrap rate is 65 rupees per kilogram.',
     crmYield: { copperPct: 0, lithiumPct: 0, cobaltPct: 0, neodymiumPct: 0, goldGramsPerTon: 0 }
+  },
+  {
+    id: 'mat_lcd_screen',
+    name_hi: 'एलसीडी और एलईडी स्क्रीन डिस्प्ले पैनल',
+    name_mr: 'एलसीडी व एलईडी स्क्रीन डिस्प्ले पॅनल',
+    name_en: 'LCD / LED Screen & Display Panels',
+    grade: 'Indium-Tin-Oxide (ITO) Glass',
+    pricePerKg: 180,
+    trend: 1.8,
+    category: 'lcd',
+    hazardLevel: 'medium',
+    hazardWarning_hi: 'चेतावनी: बैकलाइट ट्यूब में पारा (Mercury) हो सकता है। डिस्प्ले को न मोड़ें।',
+    hazardWarning_mr: 'सावधान: बॅकलाइट ट्यूबमध्ये पारा असू शकतो. डिस्प्ले तोडू नका.',
+    hazardWarning_en: 'WARNING: CCFL backlights may contain toxic mercury. Handle without bending or crushing.',
+    safeAction_hi: 'स्क्रीन को सपाट रखें, टूटने से बचाकर अधिकृत यूनिट भेजें।',
+    safeAction_mr: 'स्क्रीन सपाट ठेवा आणि सुरक्षितपणे अधिकृत युनिटकडे पाठवा.',
+    safeAction_en: 'Keep panels flat and transport in slotted foam racks to recover indium.',
+    audioText_hi: 'एलसीडी स्क्रीन का भाव 180 रुपये प्रति किलो है। इसे सावधानी से संभालें।',
+    audioText_mr: 'एलसीडी स्क्रीनचा दर 180 रुपये प्रति किलो आहे. काळजीपूर्वक हाताळा.',
+    audioText_en: 'LCD display panels rate is 180 rupees per kilogram. Handle with care.',
+    crmYield: { copperPct: 3.5, lithiumPct: 0, cobaltPct: 0, neodymiumPct: 0, goldGramsPerTon: 15 }
+  },
+  {
+    id: 'mat_other_ewaste',
+    name_hi: 'मिश्रित उपकरण व अन्य ई-कबाड़',
+    name_mr: 'मिश्र उपकरणे व इतर ई-कचरा',
+    name_en: 'Mixed Appliances & Other E-waste',
+    grade: 'Mixed Electronic Hardware',
+    pricePerKg: 120,
+    trend: 0.5,
+    category: 'other_ewaste',
+    hazardLevel: 'safe',
+    safeAction_hi: 'उपकरणों को अलग-अलग खोलकर धातु और प्लास्टिक अलग करें।',
+    safeAction_mr: 'उपकरणे वेगळी करून धातू आणि प्लास्टिक वेगळे करा.',
+    safeAction_en: 'Dismantle manually to segregate steel, copper, and transformer components.',
+    audioText_hi: 'मिश्रित ई-कबाड़ का भाव 120 रुपये प्रति किलो है।',
+    audioText_mr: 'मिश्र ई-कचऱ्याचा दर 120 रुपये प्रति किलो आहे.',
+    audioText_en: 'Mixed e-waste and small appliances rate is 120 rupees per kilogram.',
+    crmYield: { copperPct: 8.0, lithiumPct: 0, cobaltPct: 0, neodymiumPct: 1.2, goldGramsPerTon: 20 }
   }
 ];
 
@@ -958,8 +997,56 @@ export const SAFETY_PRACTICES = [
     do_hi: 'टर्मिनल पर टेप लगाकर वर्मीक्यूलाइट सेफ्टी बैग में रखें',
     do_mr: 'टर्मिनलवर टेप लावा आणि व्हर्मिक्युलाईट सुरक्षेच्या पिशवीत ठेवा',
     do_en: 'Insulate electrical terminals and transport inside vermiculite pouches',
-    audioText_hi: 'फूली हुई बैटरी को कतई न फोड़ें। इसे वर्मीक्यूलाइट सेफ्टी पाउच में रखें।',
-    audioText_mr: 'फुगलेली बॅटरी कधीही फोडू नका. सुरक्षेच्या व्हर्मिक्युलाईट पिशवीत ठेवा.',
-    audioText_en: 'Never puncture or hammer swollen batteries. Transport inside fire-retardant vermiculite pouches.'
   }
 ];
+
+export const CPCB_STANDARD_CATEGORIES = [
+  { id: 'cat_pcb', code: 'CPCB-SCH-1', name: 'High-Grade Printed Circuit Boards (PCB)', baseRate: 480 },
+  { id: 'cat_copper', code: 'CPCB-SCH-2', name: 'High-Conductivity Copper Cables & Wires', baseRate: 720 },
+  { id: 'cat_battery', code: 'CPCB-SCH-3', name: 'Lithium-Ion & Lead Acid Battery Packs', baseRate: 310 },
+  { id: 'cat_magnet', code: 'CPCB-SCH-4', name: 'Neodymium Rare-Earth Motor / Magnet Assembly', baseRate: 540 },
+  { id: 'cat_plastic', code: 'CPCB-SCH-5', name: 'Flame-Retardant ABS/HIPS Mixed E-Plastics', baseRate: 65 },
+  { id: 'cat_crt', code: 'CPCB-SCH-6', name: 'Leaded CRT Monitors & Glass Picture Tubes', baseRate: 45 },
+  { id: 'cat_lcd', code: 'CPCB-SCH-7', name: 'LCD / LED Display Screens & ITO Panels', baseRate: 180 },
+  { id: 'cat_mixed', code: 'CPCB-SCH-8', name: 'Other E-waste & Small Dismantled Appliances', baseRate: 120 }
+];
+
+export const INITIAL_CATEGORY_REQUESTS = [
+  {
+    id: 'REQ-2026-CAT-01',
+    proposedCategoryName: 'Industrial VFD Inverter Board',
+    vernacularNameHi: 'औद्योगिक वीएफडी इन्वर्टर बोर्ड',
+    vernacularNameMr: 'औद्योगिक व्हीएफडी इन्व्हर्टर बोर्ड',
+    scrapCode: 'IND-VFD-09',
+    suggestedFloorRate: 520,
+    suggestedCeilingRate: 600,
+    hazardClassification: 'medium' as const,
+    crmYieldEstimated: { copperPct: 22, lithiumPct: 0, cobaltPct: 0, neodymiumPct: 1.5, goldGramsPerTon: 80 },
+    samplePhotoUrl: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=500&auto=format&fit=crop&q=80',
+    submittedBy: 'KBD-MH-4402',
+    submittedByName: 'Ram Sevak',
+    submissionDate: '2026-03-01',
+    status: 'PENDING_AUDIT' as const
+  }
+];
+
+export const INITIAL_PARTNER_REGISTRATIONS = [
+  {
+    id: 'REG-PART-01',
+    facilityName: 'EcoMetals CPCB Authorized Dismantling Unit #4',
+    cpcbRegistrationNo: 'CPCB/EW-REC/2026/8812',
+    spcbLicenseNo: 'MPCB-PUNE-EW-902',
+    state: 'Maharashtra',
+    district: 'Pune',
+    gpsLocation: '18.6279,73.8343',
+    capacityMetricTonsPerMonth: 120.0,
+    contactPerson: 'Kailash Joshi',
+    contactPhone: '+91 98220 11223',
+    contactEmail: 'contact@ecometals-cpcb.in',
+    registrationStatus: 'ACTIVE_CERTIFIED' as const,
+    registrationDate: '2025-04-10',
+    lastInspectionDate: '2026-02-15',
+    complianceScore: 96
+  }
+];
+

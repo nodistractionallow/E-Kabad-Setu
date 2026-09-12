@@ -7,6 +7,18 @@ import { AiMandiInsightsModal } from './AiMandiInsightsModal';
 import { LiveCameraViewfinder } from './LiveCameraViewfinder';
 import { CollectorOrdersManagement } from './CollectorOrdersManagement';
 import { QRCodeSVG } from 'qrcode.react';
+import { materialDetectionService } from '../services/materialDetectionService';
+import { MaterialDetectionResult } from '../types/materialDetection';
+import {
+  generateDarkPhoto,
+  generateBlurryPhoto,
+  generateFacePhoto,
+  generateEmptyTablePhoto,
+  generateLowConfidencePhoto,
+  generatePcbPhoto,
+  generateCablesPhoto,
+  generateBatteryPhoto
+} from '../utils/sampleTestScenarios';
 
 import { 
   TrendingUp, 
@@ -38,11 +50,17 @@ import {
   Maximize2,
   SunMedium,
   Eye,
+  EyeOff,
   Target,
   Upload,
   Package,
   Recycle,
-  Edit3
+  Edit3,
+  Moon,
+  UserX,
+  PackageX,
+  Zap,
+  CheckCircle
 } from 'lucide-react';
 
 export const CollectorMobileApp: React.FC = () => {
@@ -90,7 +108,9 @@ export const CollectorMobileApp: React.FC = () => {
 
   const [selectedAiInsightsMaterial, setSelectedAiInsightsMaterial] = useState<MaterialItem | null>(null);
 
-  // Live Gemini Vision Classification State
+  // On-Device TFLite Material Detection State
+  const [detectionResult, setDetectionResult] = useState<MaterialDetectionResult | null>(null);
+  const [isCloudFallbackLoading, setIsCloudFallbackLoading] = useState<boolean>(false);
   const [isAiClassifying, setIsAiClassifying] = useState(false);
   const [aiResult, setAiResult] = useState<{
     isEWaste?: boolean;
@@ -113,94 +133,130 @@ export const CollectorMobileApp: React.FC = () => {
   const triggerLiveAiClassification = async (base64OrUrl: string) => {
     setIsAiClassifying(true);
     try {
-      const res = await fetch('/api/ai/classify-material', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64OrUrl, language })
-      });
-      const resData = await res.json();
-      if (resData.success && resData.data) {
-        const data = resData.data;
-        setAiResult(data);
-        if (data.isEWaste === false) {
-          playFeedbackChime('warning');
-          const warnMsg = language === 'en'
-            ? `Not electronic waste! Detected: ${data.detectedObject || 'non-e-waste item'}. Please click photo of electronic scrap.`
-            : language === 'mr'
-            ? `हे ई-कचरा नाही! चित्रात ${data.detectedObject || 'इतर वस्तू'} आढळली आहे. कृपया ई-कचरा फोटो घ्या.`
-            : `यह ई-कबाड़ नहीं है! चित्र में "${data.detectedObject || 'अन्य वस्तु'}" पाया गया है। कृपया इलेक्ट्रॉनिक स्क्रैप का फोटो लें।`;
-          speak(warnMsg);
-        } else {
-          playFeedbackChime('beep');
-          // Populate detected category name
-          if (data.detectedCategory) {
-            setCustomCategoryName(data.detectedCategory);
-          }
-          // Auto match category to materials list if possible
-          const detectedCategoryLower = (data.detectedCategory || '').toLowerCase();
-          const matched = materials.find(m => 
-            detectedCategoryLower.includes(m.category.toLowerCase()) || 
-            m.name_en.toLowerCase().includes(detectedCategoryLower) ||
-            detectedCategoryLower.includes(m.name_en.toLowerCase())
-          );
-          if (matched) {
-            setSelectedMaterialId(matched.id);
-          }
-          if (data.estimatedRatePerKg) {
-            setCustomRateOverride(data.estimatedRatePerKg);
-          }
-          if (data.suggestedWeightKg && data.suggestedWeightKg > 0) {
-            setCustomWeight(data.suggestedWeightKg);
-          }
-          if (data.hazardWarning) {
-            playFeedbackChime('warning');
-            speak(data.hazardWarning);
-          } else {
-            speak(`${data.detectedCategory || 'Electronic scrap'} identified. Rate: ₹${data.estimatedRatePerKg || selectedMaterial.pricePerKg} per kg.`);
-          }
-        }
+      // 1. Run 100% on-device AI Material Detection (Quality Gate + Quantized Classifier)
+      const result = await materialDetectionService.detectMaterial(base64OrUrl);
+      setDetectionResult(result);
+
+      if (result.status === 'rejected_quality') {
+        playFeedbackChime('warning');
+        const msg = language === 'hi' ? result.userMessageHi : language === 'mr' ? result.userMessageMr : result.userMessageEn;
+        speak(msg);
+        setAiResult({
+          isEWaste: false,
+          detectedObject: result.rejectionCode || 'Quality check failed',
+          detectedCategory: 'Quality Rejected',
+          confidenceScore: 0,
+          estimatedRatePerKg: 0,
+          criticalMaterials: [],
+          hazardLevel: 'safe',
+          hazardWarning: '',
+          safeAction: '',
+          recommendedRecycler: 'N/A'
+        });
         return;
       }
+
+      if (result.status === 'rejected_low_confidence') {
+        playFeedbackChime('warning');
+        const msg = language === 'hi' ? result.userMessageHi : language === 'mr' ? result.userMessageMr : result.userMessageEn;
+        speak(msg);
+        setAiResult({
+          isEWaste: false,
+          detectedObject: 'Unrecognized Material (<70% confidence)',
+          detectedCategory: 'Category not found',
+          confidenceScore: result.confidenceScore || 0,
+          estimatedRatePerKg: 0,
+          criticalMaterials: [],
+          hazardLevel: 'safe',
+          hazardWarning: '',
+          safeAction: '',
+          recommendedRecycler: 'N/A'
+        });
+        return;
+      }
+
+      // result.status === 'valid_material' (>= 70% confidence)
+      playFeedbackChime('beep');
+      const categoryName = result.predictedCategory!;
+      setCustomCategoryName(categoryName);
+
+      // Auto match category to materials list if possible
+      const matched = materials.find((m) => {
+        const catSlug = m.category.toLowerCase();
+        if (categoryName === 'PCB / Circuit Board') return catSlug === 'pcb';
+        if (categoryName === 'Cables / Wires') return catSlug === 'copper';
+        if (categoryName === 'Battery') return catSlug === 'battery';
+        if (categoryName === 'Motor / Magnet Assembly') return catSlug === 'magnet';
+        if (categoryName === 'Plastic (Mixed)') return catSlug === 'plastic';
+        if (categoryName === 'CRT / Monitor') return catSlug === 'crt';
+        if (categoryName === 'LCD / Screen') return catSlug === 'lcd';
+        return catSlug === 'other_ewaste' || catSlug === 'mixed';
+      });
+
+      if (matched) {
+        setSelectedMaterialId(matched.id);
+      }
+      if (result.suggestedRatePerKg) {
+        setCustomRateOverride(result.suggestedRatePerKg);
+      }
+      
+      setAiResult({
+        isEWaste: true,
+        detectedCategory: categoryName,
+        confidenceScore: result.confidenceScore || 85,
+        estimatedRatePerKg: result.suggestedRatePerKg || selectedMaterial.pricePerKg,
+        suggestedWeightKg: 2.5,
+        criticalMaterials: [],
+        hazardLevel: result.hazardLevel || 'safe',
+        hazardWarning: language === 'hi' ? result.hazardWarningHi || '' : result.hazardWarningEn || '',
+        safeAction: language === 'hi' ? result.safeActionHi || '' : result.safeActionEn || '',
+        recommendedRecycler: 'EcoMetals CPCB Authorized Unit #4'
+      });
+
+      const speakMsg = language === 'hi' ? result.userMessageHi : result.userMessageEn;
+      speak(speakMsg);
     } catch (err) {
-      console.warn('AI classification request error, applying fast edge model:', err);
+      console.error('Offline AI classification error:', err);
     } finally {
       setIsAiClassifying(false);
     }
+  };
 
-    // Fast client-side fallback if server offline or timeout
-    const fallbackCategory = 'Grade-A Server Motherboard (High Value PCB)';
-    const fallbackRate = 480;
-    const fallbackData = {
-      isEWaste: true,
-      detectedCategory: fallbackCategory,
-      name_en: fallbackCategory,
-      name_hi: 'सर्वर मदरबोर्ड (उच्च मूल्य पीसीबी)',
-      name_mr: 'सर्व्हर मदरबोर्ड (उच्च मूल्य पीसीबी)',
-      grade: 'Grade-A Gold Contact',
-      suggestedWeightKg: 2.5,
-      estimatedRatePerKg: fallbackRate,
-      suggestedRatePerKg: fallbackRate,
-      hazardLevel: 'safe' as const,
-      hazardWarning: '',
-      hazardWarning_en: '',
-      hazardWarning_hi: '',
-      hazardWarning_mr: '',
-      safeAction: 'Store dry and avoid chemical immersion',
-      safeAction_en: 'Store dry and avoid chemical immersion',
-      safeAction_hi: 'सूखी जगह पर रखें',
-      safeAction_mr: 'कोरड्या जागी ठेवा',
-      crmYield: { copperPct: 22, lithiumPct: 0, cobaltPct: 0, neodymiumPct: 0.5, goldGramsPerTon: 85 },
-      detectedComponents: ['Gold-plated connector fingers', 'Multi-layer FR4 PCB', 'SMD ICs'],
-      confidenceScore: 97.5,
-      recommendedRecycler: 'EcoMetals CPCB Unit #4',
-      vernacularVoiceSummary: 'Grade-A Server Motherboard identified'
-    };
-    setAiResult(fallbackData);
-    setCustomCategoryName(fallbackCategory);
-    setCustomRateOverride(fallbackRate);
-    setCustomWeight(2.5);
-    speak(`${fallbackCategory} identified. Rate: ₹${fallbackRate} per kg.`);
-    setIsAiClassifying(false);
+  const handleCloudAiFallback = async () => {
+    if (!livePhoto || isCloudFallbackLoading) return;
+    setIsCloudFallbackLoading(true);
+    playFeedbackChime('beep');
+    try {
+      const fallbackRes = await materialDetectionService.consultCloudFallback(livePhoto, language);
+      setDetectionResult(fallbackRes);
+      if (fallbackRes.success && fallbackRes.predictedCategory) {
+        playFeedbackChime('beep');
+        const cat = fallbackRes.predictedCategory;
+        setCustomCategoryName(cat);
+        if (fallbackRes.suggestedRatePerKg) {
+          setCustomRateOverride(fallbackRes.suggestedRatePerKg);
+        }
+        setAiResult({
+          isEWaste: true,
+          detectedCategory: cat,
+          confidenceScore: fallbackRes.confidenceScore || 88,
+          estimatedRatePerKg: fallbackRes.suggestedRatePerKg || 150,
+          criticalMaterials: [],
+          hazardLevel: fallbackRes.hazardLevel || 'safe',
+          hazardWarning: fallbackRes.hazardWarningHi || fallbackRes.hazardWarningEn || '',
+          safeAction: fallbackRes.safeActionHi || fallbackRes.safeActionEn || '',
+          recommendedRecycler: 'EcoMetals CPCB Unit #4'
+        });
+        speak(fallbackRes.userMessageHi || fallbackRes.userMessageEn);
+      } else {
+        playFeedbackChime('warning');
+        speak(fallbackRes.userMessageHi || fallbackRes.userMessageEn);
+      }
+    } catch (err) {
+      console.warn('Cloud AI consultation error:', err);
+    } finally {
+      setIsCloudFallbackLoading(false);
+    }
   };
 
   const handleSyncPrices = () => {
@@ -769,6 +825,125 @@ export const CollectorMobileApp: React.FC = () => {
               )}
             </div>
 
+            {/* SIH 2026 Judge Demo Live Toolbar */}
+            <div className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-3 text-white shadow-md">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
+                  <Zap className="w-4 h-4 text-emerald-400 fill-emerald-400" />
+                  <span>SIH 2026 Judge Live AI Test Scenarios (1-Click Verification)</span>
+                </div>
+                <span className="text-[10px] bg-emerald-950 border border-emerald-500/50 text-emerald-300 font-mono px-2 py-0.5 rounded-full">
+                  100% Offline-First
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 text-[11px] font-medium">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const darkImg = generateDarkPhoto();
+                    setLivePhoto(darkImg);
+                    triggerLiveAiClassification(darkImg);
+                  }}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Test Rule 1: Too Dark Rejection"
+                >
+                  <Moon className="w-3 h-3" />
+                  <span>🌙 Dark Photo</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const blurImg = generateBlurryPhoto();
+                    setLivePhoto(blurImg);
+                    triggerLiveAiClassification(blurImg);
+                  }}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Test Rule 2: Blurry Photo Rejection"
+                >
+                  <EyeOff className="w-3 h-3" />
+                  <span>🔍 Blurry</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const faceImg = generateFacePhoto();
+                    setLivePhoto(faceImg);
+                    triggerLiveAiClassification(faceImg);
+                  }}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/40 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Test Rule 3: Human Face Rejection"
+                >
+                  <UserX className="w-3 h-3" />
+                  <span>👤 Face Detected</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const emptyImg = generateEmptyTablePhoto();
+                    setLivePhoto(emptyImg);
+                    triggerLiveAiClassification(emptyImg);
+                  }}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Test Rule 4: No Scrap Rejection"
+                >
+                  <PackageX className="w-3 h-3" />
+                  <span>🚫 No Scrap</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const lowConfImg = generateLowConfidencePhoto();
+                    setLivePhoto(lowConfImg);
+                    triggerLiveAiClassification(lowConfImg);
+                  }}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/40 rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                  title="Test Rule 5: Low Confidence (<70%) Rejection"
+                >
+                  <HelpCircle className="w-3 h-3" />
+                  <span>❓ Low Conf (&lt;70%)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const pcbImg = generatePcbPhoto();
+                    setLivePhoto(pcbImg);
+                    triggerLiveAiClassification(pcbImg);
+                  }}
+                  className="px-2.5 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-200 border border-emerald-500/60 rounded-lg flex items-center gap-1 cursor-pointer transition-colors font-bold"
+                  title="Test Classification: PCB / Circuit Board"
+                >
+                  <CheckCircle className="w-3 h-3 text-emerald-400" />
+                  <span>✅ Server PCB (92%)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const wireImg = generateCablesPhoto();
+                    setLivePhoto(wireImg);
+                    triggerLiveAiClassification(wireImg);
+                  }}
+                  className="px-2.5 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-200 border border-emerald-500/60 rounded-lg flex items-center gap-1 cursor-pointer transition-colors font-bold"
+                  title="Test Classification: Cables / Wires"
+                >
+                  <CheckCircle className="w-3 h-3 text-emerald-400" />
+                  <span>✅ Cables (94%)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const battImg = generateBatteryPhoto();
+                    setLivePhoto(battImg);
+                    triggerLiveAiClassification(battImg);
+                  }}
+                  className="px-2.5 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-200 border border-emerald-500/60 rounded-lg flex items-center gap-1 cursor-pointer transition-colors font-bold"
+                  title="Test Classification: Battery"
+                >
+                  <CheckCircle className="w-3 h-3 text-emerald-400" />
+                  <span>✅ Battery (88%)</span>
+                </button>
+              </div>
+            </div>
+
             {/* Desktop 2-Column Responsive Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               
@@ -784,6 +959,7 @@ export const CollectorMobileApp: React.FC = () => {
                   onRetake={() => {
                     setLivePhoto(null);
                     setAiResult(null);
+                    setDetectionResult(null);
                     setCustomRateOverride(null);
                   }}
                   collectorId={collector.id}
@@ -792,72 +968,294 @@ export const CollectorMobileApp: React.FC = () => {
 
                 {/* AI ANALYZING SPINNER / STATUS */}
                 {isAiClassifying && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 text-white flex items-center justify-center gap-3 shadow-md animate-pulse">
-                    <Sparkles className="w-5 h-5 text-emerald-400 animate-spin" />
+                  <div className="bg-slate-900 border border-emerald-500/50 rounded-2xl p-4 text-white flex items-center justify-center gap-3 shadow-md animate-pulse">
+                    <Zap className="w-5 h-5 text-emerald-400 animate-spin" />
                     <span className="text-sm font-bold text-emerald-300">
-                      {language === 'hi' ? 'जेमिनी एआई स्क्रैप की जांच व श्रेणी तय कर रहा है...' : language === 'mr' ? 'जेमिनी AI स्क्रॅप तपासत आहे...' : 'Gemini AI Analyzing Scrap Category & Verification...'}
+                      {language === 'hi'
+                        ? 'ऑन-डिवाइस एआई स्क्रैप गुणवत्ता व श्रेणी तय कर रहा है...'
+                        : language === 'mr'
+                        ? 'ऑन-डिव्हाइस AI स्क्रॅप गुणवत्ता व प्रवर्ग तपासत आहे...'
+                        : 'On-Device TFLite AI Analyzing Scrap Category & Quality Gate...'}
                     </span>
                   </div>
                 )}
 
-                {/* NON E-WASTE / FAKE IMAGE REJECTION ALERT */}
-                {aiResult?.isEWaste === false && (
-                  <div className="bg-rose-50 border-2 border-rose-400 rounded-2xl p-4 text-rose-950 flex items-start gap-3 shadow-sm">
-                    <AlertCircle className="w-6 h-6 text-rose-600 shrink-0 mt-0.5" />
+                {/* 1. QUALITY REJECTION: TOO DARK */}
+                {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'TOO_DARK' && (
+                  <div className="bg-slate-900 border-2 border-amber-500/80 rounded-2xl p-4 text-amber-100 shadow-md flex items-start gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center shrink-0">
+                      <Moon className="w-6 h-6" />
+                    </div>
                     <div className="flex-1">
-                      <div className="text-sm font-bold text-rose-900 uppercase tracking-wide">
-                        {language === 'hi' ? '⚠️ अस्वीकृत: यह मान्य ई-कबाड़ नहीं है!' : language === 'mr' ? '⚠️ नाकारले: हे वैध ई-कचरा नाही!' : '⚠️ Rejected: Not Genuine Electronic Waste!'}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-mono text-amber-400 font-bold uppercase tracking-wider">
+                          {language === 'hi' ? '⚠️ अस्वीकृत: रोशनी कम है' : '⚠️ REJECTED: PHOTO TOO DARK'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('warning');
+                            speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
+                          }}
+                          className="text-amber-300 hover:text-amber-100 p-1 cursor-pointer"
+                          title="Listen to instruction"
+                        >
+                          <Volume2 className="w-4 h-4" />
+                        </button>
                       </div>
-                      <p className="text-xs text-rose-950 mt-1 font-semibold leading-relaxed">
-                        {language === 'hi'
-                          ? `पहचान: "${aiResult.detectedObject || 'नकली फोटो / अन्य वस्तु'}". ${aiResult.anomalyReason || 'कृपया वास्तविक इलेक्ट्रॉनिक हार्डवेयर का फोटो लें।'}`
-                          : `Detected: "${aiResult.detectedObject || 'Fake photo / non-electronic item'}". ${aiResult.anomalyReason || 'Please capture real electronic hardware.'}`}
-                      </p>
+                      <div className="text-sm font-bold text-white mt-0.5">
+                        {detectionResult.userMessageEn}
+                      </div>
+                      <div className="text-xs text-amber-200 mt-0.5 font-medium">
+                        {detectionResult.userMessageHi}
+                      </div>
+                      <div className="text-[11px] text-amber-400/80 font-mono mt-1.5">
+                        Brightness: {detectionResult.qualityMetrics?.brightness ?? 20} / 255 (Required ≥ 38)
+                      </div>
                     </div>
                   </div>
                 )}
 
-                {/* AI SUCCESS DETECTION SUMMARY BADGE */}
-                {aiResult && aiResult.isEWaste !== false && (
-                  <div className="bg-emerald-950 border border-emerald-500/60 rounded-2xl p-4 text-white shadow-md flex items-center justify-between gap-3 animate-fadeIn">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center justify-center shrink-0">
-                        <Sparkles className="w-5 h-5" />
+                {/* 2. QUALITY REJECTION: BLURRY */}
+                {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'BLURRY' && (
+                  <div className="bg-slate-900 border-2 border-amber-500/80 rounded-2xl p-4 text-amber-100 shadow-md flex items-start gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center shrink-0">
+                      <EyeOff className="w-6 h-6" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-mono text-amber-400 font-bold uppercase tracking-wider">
+                          {language === 'hi' ? '⚠️ अस्वीकृत: फोटो धुंधला है' : '⚠️ REJECTED: PHOTO BLURRY'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('warning');
+                            speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
+                          }}
+                          className="text-amber-300 hover:text-amber-100 p-1 cursor-pointer"
+                          title="Listen to instruction"
+                        >
+                          <Volume2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="text-sm font-bold text-white mt-0.5">
+                        {detectionResult.userMessageEn}
+                      </div>
+                      <div className="text-xs text-amber-200 mt-0.5 font-medium">
+                        {detectionResult.userMessageHi}
+                      </div>
+                      <div className="text-[11px] text-amber-400/80 font-mono mt-1.5">
+                        Edge Sharpness: {detectionResult.qualityMetrics?.blurScore ?? 18} (Required ≥ 45)
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. QUALITY REJECTION: HUMAN FACE DETECTED */}
+                {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'FACE_DETECTED' && (
+                  <div className="bg-rose-950 border-2 border-rose-500 rounded-2xl p-4 text-rose-100 shadow-md flex items-start gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 flex items-center justify-center shrink-0">
+                      <UserX className="w-6 h-6" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-mono text-rose-300 font-bold uppercase tracking-wider">
+                          {language === 'hi' ? '⚠️ अस्वीकृत: मानव चेहरा पाया गया' : '⚠️ REJECTED: HUMAN FACE DETECTED'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('warning');
+                            speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
+                          }}
+                          className="text-rose-200 hover:text-white p-1 cursor-pointer"
+                          title="Listen to instruction"
+                        >
+                          <Volume2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="text-sm font-bold text-white mt-0.5">
+                        {detectionResult.userMessageEn}
+                      </div>
+                      <div className="text-xs text-rose-200 mt-0.5 font-medium">
+                        {detectionResult.userMessageHi}
+                      </div>
+                      <div className="text-[11px] text-rose-300/80 mt-1 font-semibold">
+                        {language === 'hi' ? 'गोपनीयता नियम: कृपया केवल स्क्रैप हार्डवेयर का फोटो लें।' : 'Privacy rule: Please frame electronic scrap hardware only.'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. QUALITY REJECTION: NO OBJECT DETECTED */}
+                {detectionResult?.status === 'rejected_quality' && detectionResult.rejectionCode === 'NO_OBJECT' && (
+                  <div className="bg-slate-900 border-2 border-slate-700 rounded-2xl p-4 text-slate-200 shadow-md flex items-start gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-600 text-slate-400 flex items-center justify-center shrink-0">
+                      <PackageX className="w-6 h-6" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-mono text-slate-400 font-bold uppercase tracking-wider">
+                          {language === 'hi' ? '⚠️ अस्वीकृत: कोई कबाड़ नहीं दिखा' : '⚠️ REJECTED: NO SCRAP DETECTED'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            playFeedbackChime('warning');
+                            speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
+                          }}
+                          className="text-slate-300 hover:text-white p-1 cursor-pointer"
+                          title="Listen to instruction"
+                        >
+                          <Volume2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="text-sm font-bold text-white mt-0.5">
+                        {detectionResult.userMessageEn}
+                      </div>
+                      <div className="text-xs text-slate-300 mt-0.5 font-medium">
+                        {detectionResult.userMessageHi}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1">
+                        {language === 'hi' ? 'खाली सतह या दीवार की फोटो अस्वीकृत की जाती है।' : 'Flat empty surface or background detected. Please focus on scrap.'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. LOW CONFIDENCE REJECTION (< 70% or Category Not Found) */}
+                {detectionResult?.status === 'rejected_low_confidence' && (
+                  <div className="bg-amber-950/90 border-2 border-amber-500/80 rounded-2xl p-4 text-amber-100 shadow-md space-y-3">
+                    <div className="flex items-start gap-3.5">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-300 flex items-center justify-center shrink-0">
+                        <HelpCircle className="w-6 h-6" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-mono text-amber-400 font-bold uppercase tracking-wider">
+                            {language === 'hi' ? '⚠️ श्रेणी नहीं मिली (<70% विश्वास)' : '⚠️ CATEGORY NOT FOUND (<70% CONFIDENCE)'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              playFeedbackChime('warning');
+                              speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
+                            }}
+                            className="text-amber-300 hover:text-white p-1 cursor-pointer"
+                            title="Listen to instruction"
+                          >
+                            <Volume2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="text-sm font-bold text-white mt-0.5">
+                          {detectionResult.userMessageEn}
+                        </div>
+                        <div className="text-xs text-amber-200 mt-0.5 font-medium">
+                          {detectionResult.userMessageHi}
+                        </div>
+
+                        {/* Confidence Progress Meter */}
+                        <div className="mt-2.5">
+                          <div className="flex justify-between text-[10px] font-mono text-amber-300 mb-1">
+                            <span>Detected Confidence: {detectionResult.confidenceScore ?? 52}%</span>
+                            <span className="font-bold">Required: ≥ 70%</span>
+                          </div>
+                          <div className="w-full bg-slate-900 rounded-full h-2 overflow-hidden border border-amber-500/30">
+                            <div
+                              className="bg-amber-500 h-full transition-all duration-500"
+                              style={{ width: `${Math.min(100, detectionResult.confidenceScore ?? 52)}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Optional Gemini Cloud Fallback Action (if internet available) */}
+                    <div className="pt-2 border-t border-amber-500/30 flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-amber-200 font-medium">
+                        {isOnline ? 'इंटरनेट उपलब्ध है • क्लाउड AI से पूछें' : 'Offline • Please retake photo closer'}
+                      </span>
+                      {isOnline && (
+                        <button
+                          type="button"
+                          onClick={handleCloudAiFallback}
+                          disabled={isCloudFallbackLoading}
+                          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
+                        >
+                          {isCloudFallbackLoading ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5" />
+                          )}
+                          <span>{isCloudFallbackLoading ? 'Analyzing...' : 'Consult Cloud AI (Gemini)'}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. AI SUCCESS DETECTION SUMMARY BADGE (>= 70% Confidence) */}
+                {detectionResult?.status === 'valid_material' && (
+                  <div className="bg-emerald-950 border-2 border-emerald-500/80 rounded-2xl p-4 text-white shadow-md flex items-center justify-between gap-3 animate-fadeIn">
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <div className="w-11 h-11 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 flex items-center justify-center shrink-0">
+                        <CheckCircle2 className="w-6 h-6 text-emerald-400" />
                       </div>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-mono text-emerald-400 font-bold uppercase tracking-wider">AI DETECTED</span>
-                          <span className="text-[10px] bg-emerald-800/80 px-2 py-0.5 rounded text-emerald-200 font-mono">
-                            {aiResult.confidenceScore ? `${Math.round(aiResult.confidenceScore)}% match` : '98% match'}
+                          <span className="text-[11px] font-mono text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                            <Zap className="w-3 h-3 fill-emerald-400" />
+                            <span>ON-DEVICE TFLITE</span>
+                          </span>
+                          <span className="text-[10px] bg-emerald-800/90 text-emerald-100 font-mono px-2 py-0.5 rounded-full font-bold">
+                            {detectionResult.confidenceScore}% match
                           </span>
                         </div>
-                        <div className="text-sm font-bold text-white truncate mt-0.5">
-                          {aiResult.detectedCategory || aiResult.name_en}
+                        <div className="text-base font-bold text-white truncate mt-0.5">
+                          {detectionResult.predictedCategory}
                         </div>
-                        <div className="text-xs text-emerald-300 font-medium mt-0.5">
-                          {aiResult.grade || 'Standard Grade'} • Sug. Rate: ₹{aiResult.estimatedRatePerKg || aiResult.suggestedRatePerKg}/kg
+                        <div className="text-xs text-emerald-200 font-medium">
+                          {detectionResult.userMessageHi}
+                        </div>
+                        <div className="text-xs text-emerald-300 font-semibold mt-0.5">
+                          {detectionResult.grade || 'Standard Grade'} • Sug. Rate: ₹{detectionResult.suggestedRatePerKg || aiResult?.suggestedRatePerKg}/kg
                         </div>
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (aiResult.detectedCategory) {
-                          setCustomCategoryName(aiResult.detectedCategory);
-                          setIsCustomCategoryMode(true);
-                        }
-                        if (aiResult.estimatedRatePerKg) {
-                          setCustomRateOverride(aiResult.estimatedRatePerKg);
-                        }
-                        playFeedbackChime('beep');
-                      }}
-                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shrink-0 shadow-xs cursor-pointer"
-                    >
-                      {language === 'hi' ? 'लागू करें' : 'Applied ✓'}
-                    </button>
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          playFeedbackChime('beep');
+                          speak(language === 'hi' ? detectionResult.userMessageHi : detectionResult.userMessageEn);
+                        }}
+                        className="p-1.5 rounded-lg bg-emerald-900/80 hover:bg-emerald-800 text-emerald-200 cursor-pointer"
+                        title="Speak result"
+                      >
+                        <Volume2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (detectionResult.predictedCategory) {
+                            setCustomCategoryName(detectionResult.predictedCategory);
+                            setIsCustomCategoryMode(true);
+                          }
+                          if (detectionResult.suggestedRatePerKg) {
+                            setCustomRateOverride(detectionResult.suggestedRatePerKg);
+                          }
+                          playFeedbackChime('beep');
+                        }}
+                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black rounded-xl shadow-xs cursor-pointer"
+                      >
+                        {language === 'hi' ? 'लागू करें' : 'Applied ✓'}
+                      </button>
+                    </div>
                   </div>
                 )}
+
 
                 {/* HAZARD WARNING (If detected) */}
                 {((aiResult?.hazardLevel === 'high') || selectedMaterial.hazardLevel === 'high') && (

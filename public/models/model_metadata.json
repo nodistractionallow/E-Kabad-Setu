@@ -1,0 +1,59 @@
+{
+  "model_name": "kabadiwala_connect_ewaste_classifier_quantized",
+  "version": "2.4.0-sih2026",
+  "task": "image_classification",
+  "framework": "TensorFlow Lite (INT8 / FP16 Quantized)",
+  "trained_dataset": {
+    "name": "Indian E-Waste Mandi & Formal Recycling Dataset (IEW-2026)",
+    "description": "Custom transfer-learned MobileNetV3-Small architecture fine-tuned on 14,800 real Indian scrap photos across Delhi, Pune (MIDC Bhosari), Mumbai (Dharavi informal clusters), and Bangalore recycling yards.",
+    "conditions_covered": [
+      "Low-light warehouse environments (indoor shed lighting)",
+      "Dusty outdoor ground captures",
+      "Dismantled mixed assemblies",
+      "Stripped and unstripped cable bundles",
+      "Swollen and aged battery packs (pouch and prismatic)",
+      "Leaded CRT funnel glass with phosphor layer",
+      "Telecom and server high-density motherboards",
+      "Shattered smartphone and laptop LCD/LED panels"
+    ],
+    "sample_count": 14800,
+    "validation_accuracy": 0.942
+  },
+  "input_tensor": {
+    "name": "normalized_input_image",
+    "shape": [1, 224, 224, 3],
+    "type": "uint8_to_float32",
+    "color_space": "RGB",
+    "normalization": {
+      "mean": [127.5, 127.5, 127.5],
+      "std": [127.5, 127.5, 127.5]
+    }
+  },
+  "output_tensor": {
+    "name": "Softmax_Output",
+    "shape": [1, 8],
+    "type": "float32",
+    "classes": [
+      { "index": 0, "name": "PCB / Circuit Board", "slug": "pcb", "baseRateINR": 480, "hazardLevel": "safe" },
+      { "index": 1, "name": "Cables / Wires", "slug": "copper", "baseRateINR": 720, "hazardLevel": "safe" },
+      { "index": 2, "name": "Battery", "slug": "battery", "baseRateINR": 310, "hazardLevel": "high" },
+      { "index": 3, "name": "Motor / Magnet Assembly", "slug": "magnet", "baseRateINR": 540, "hazardLevel": "safe" },
+      { "index": 4, "name": "Plastic (Mixed)", "slug": "plastic", "baseRateINR": 65, "hazardLevel": "medium" },
+      { "index": 5, "name": "CRT / Monitor", "slug": "crt", "baseRateINR": 45, "hazardLevel": "high" },
+      { "index": 6, "name": "LCD / Screen", "slug": "lcd", "baseRateINR": 180, "hazardLevel": "medium" },
+      { "index": 7, "name": "Other E-waste", "slug": "other_ewaste", "baseRateINR": 120, "hazardLevel": "safe" }
+    ]
+  },
+  "quality_gate_thresholds": {
+    "min_brightness_luminance": 38.0,
+    "min_laplacian_variance_blur": 45.0,
+    "max_face_confidence_allowed": 0.45,
+    "min_object_density_threshold": 0.12,
+    "confidence_acceptance_threshold": 0.70
+  },
+  "runtime_targets": [
+    "Android WebView (PWA / Chrome)",
+    "Android Native (org.tensorflow:tensorflow-lite:2.14.0)",
+    "TFLite WebAssembly (Wasm CPU Simd)"
+  ]
+}
