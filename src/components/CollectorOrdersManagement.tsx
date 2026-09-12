@@ -4,6 +4,8 @@ import { TablePagination } from './TablePagination';
 import { DigitalStampOverlay } from './DigitalStampOverlay';
 import { QRCodeSVG } from 'qrcode.react';
 import { playFeedbackChime } from '../utils/speech';
+import { useApp } from '../context/AppContext';
+import { getTrackingUrl } from '../utils/trackingUrl';
 import { 
   Package, 
   Clock, 
@@ -25,7 +27,8 @@ import {
   Printer,
   ChevronRight,
   ShieldCheck,
-  Tag
+  Tag,
+  ExternalLink
 } from 'lucide-react';
 
 interface CollectorOrdersManagementProps {
@@ -43,6 +46,7 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
   onOpenQrPass,
   onNavigateToScan
 }) => {
+  const { setActivePublicOrderId } = useApp();
   // Folder sub-tab: 'pending' | 'completed' | 'quarantined'
   const [activeFolder, setActiveFolder] = useState<'pending' | 'completed' | 'quarantined'>('pending');
 
@@ -519,6 +523,20 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
                       {/* Column 5: Action Buttons */}
                       <td className="py-2.5 px-3 align-top text-right">
                         <div className="flex flex-col items-end gap-1">
+                          {/* Live Tracking & Payout Page Button */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              playFeedbackChime('beep');
+                              setActivePublicOrderId(lot.id);
+                            }}
+                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                            title="Open live order tracking & direct statutory payout page"
+                          >
+                            <ExternalLink className="w-3 h-3 text-white" />
+                            <span>Track & Pay ↗</span>
+                          </button>
+
                           {/* QR Gate Pass Button */}
                           <button
                             type="button"
@@ -745,15 +763,10 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
             </div>
 
             {/* High Contrast QR Code */}
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-4">
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-3">
               <div className="w-44 h-44 bg-white p-2 rounded-xl flex flex-col items-center justify-center relative border border-slate-200">
                 <QRCodeSVG
-                  value={JSON.stringify({
-                    lotId: viewingQrLot.id,
-                    collectorId: collector.id,
-                    material: viewingQrLot.materialName,
-                    weight: viewingQrLot.weightKg
-                  })}
+                  value={getTrackingUrl(viewingQrLot.id)}
                   size={160}
                   level={"H"}
                   includeMargin={false}
@@ -767,7 +780,22 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
               </div>
             </div>
 
-            <div className="bg-slate-50 rounded-2xl p-3 text-left border border-slate-200 text-xs space-y-1.5 font-mono mb-4">
+            {/* Live Web Tracking Link */}
+            <div className="mb-3 px-1">
+              <p className="text-[10px] text-slate-500">
+                Scan with smartphone camera or open tracking link:
+              </p>
+              <a
+                href={getTrackingUrl(viewingQrLot.id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] text-emerald-700 font-mono underline break-all hover:text-emerald-900 mt-0.5 inline-block"
+              >
+                {getTrackingUrl(viewingQrLot.id)}
+              </a>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-3 text-left border border-slate-200 text-xs space-y-1.5 font-mono mb-3">
               <div className="flex justify-between">
                 <span className="text-slate-500">Weight & Rate:</span>
                 <span className="text-slate-900 font-bold">{viewingQrLot.weightKg} kg @ ₹{viewingQrLot.ratePerKg}/kg</span>
@@ -782,10 +810,24 @@ export const CollectorOrdersManagement: React.FC<CollectorOrdersManagementProps>
               </div>
             </div>
 
+            {/* Direct button to open live order status & payout page */}
+            <button
+              type="button"
+              onClick={() => {
+                const targetLotId = viewingQrLot.id;
+                setViewingQrLot(null);
+                setActivePublicOrderId(targetLotId);
+              }}
+              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl shadow-md cursor-pointer text-xs flex items-center justify-center gap-1.5 mb-2 transition-transform active:scale-98"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Open Live Tracking & Direct Payout Page ↗</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setViewingQrLot(null)}
-              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs text-xs"
+              className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
             >
               Close Pass
             </button>

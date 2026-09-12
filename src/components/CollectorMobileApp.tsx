@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { Language, MaterialItem } from '../types';
 import { AI_CLASSIFICATION_PRESETS, SAFETY_PRACTICES } from '../data/mockData';
 import { playFeedbackChime } from '../utils/speech';
-import { AiMandiInsightsModal } from './AiMandiInsightsModal';
+import { getTrackingUrl } from '../utils/trackingUrl';
 import { CollectorPriceGraphModal } from './CollectorPriceGraphModal';
 import { LiveCameraViewfinder } from './LiveCameraViewfinder';
 import { CollectorOrdersManagement } from './CollectorOrdersManagement';
@@ -52,7 +52,8 @@ import {
   UserX,
   PackageX,
   Zap,
-  CheckCircle
+  CheckCircle,
+  ExternalLink
 } from 'lucide-react';
 
 export const CollectorMobileApp: React.FC = () => {
@@ -68,6 +69,8 @@ export const CollectorMobileApp: React.FC = () => {
     addCustomMaterial,
     activeCreatedLot, 
     setActiveCreatedLot,
+    activePublicOrderId,
+    setActivePublicOrderId,
     isOnline, 
     setIsOnline,
     syncPendingAiClassifications,
@@ -98,7 +101,6 @@ export const CollectorMobileApp: React.FC = () => {
   // Passbook payment mode filter
   const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'UPI' | 'CASH'>('ALL');
 
-  const [selectedAiInsightsMaterial, setSelectedAiInsightsMaterial] = useState<MaterialItem | null>(null);
   const [selectedGraphMaterial, setSelectedGraphMaterial] = useState<MaterialItem | null>(null);
 
   // On-Device TFLite Material Detection State
@@ -771,25 +773,11 @@ export const CollectorMobileApp: React.FC = () => {
                             playFeedbackChime('beep');
                             setSelectedGraphMaterial(mat);
                           }}
-                          className="px-2.5 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                          className="px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
                           title="7-Day Simple Price Graph"
                         >
-                          <BarChart2 className="w-3.5 h-3.5 text-teal-600" />
-                          <span>{language === 'hi' ? 'ग्राफ' : language === 'mr' ? 'आलेख' : 'Graph'}</span>
-                        </button>
-
-                        {/* Gemini AI Insights Button */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            playFeedbackChime('beep');
-                            setSelectedAiInsightsMaterial(mat);
-                          }}
-                          className="px-2.5 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
-                          title="Gemini AI Market Intelligence"
-                        >
-                          <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>AI भाव</span>
+                          <BarChart2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>{language === 'hi' ? 'भाव ग्राफ' : language === 'mr' ? 'दर आलेख' : 'Price Graph'}</span>
                         </button>
                       </div>
                     </div>
@@ -1625,16 +1613,10 @@ export const CollectorMobileApp: React.FC = () => {
             </div>
 
             {/* Interactive High-Contrast QR Stamp */}
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-4">
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 inline-block shadow-xs mb-3">
               <div className="w-48 h-48 bg-white p-2.5 rounded-xl flex flex-col items-center justify-center relative border border-slate-200">
                 <QRCodeSVG 
-                  value={JSON.stringify({
-                    lotId: activeCreatedLot.id,
-                    collectorId: collector.id,
-                    material: activeCreatedLot.materialName,
-                    weight: activeCreatedLot.weightKg,
-                    priceTBD: activeCreatedLot.ratePerKg === 0 && activeCreatedLot.materialName === 'Other E-waste'
-                  })} 
+                  value={getTrackingUrl(activeCreatedLot.id)} 
                   size={170} 
                   level={"H"}
                   includeMargin={false}
@@ -1646,6 +1628,25 @@ export const CollectorMobileApp: React.FC = () => {
                   </div>
                 </div>
               </div>
+            </div>
+
+            {/* Live Web Tracking URL */}
+            <div className="mb-4 px-2">
+              <p className="text-[11px] text-slate-500 font-medium">
+                {language === 'hi' 
+                  ? '📱 फोन कैमरे से स्कैन करें या नीचे दिए बटन से लाइव स्टेटस खोलें:' 
+                  : language === 'mr'
+                  ? '📱 फोन कॅमेऱ्याने स्कॅन करा किंवा खालील बटणावर क्लिक करा:'
+                  : '📱 Scan with phone camera or tap below to open live tracking & payout:'}
+              </p>
+              <a 
+                href={getTrackingUrl(activeCreatedLot.id)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-emerald-700 font-mono underline break-all hover:text-emerald-900 mt-1 inline-block"
+              >
+                {getTrackingUrl(activeCreatedLot.id)}
+              </a>
             </div>
 
             {/* TBD notice banner for Other E-waste */}
@@ -1704,22 +1705,34 @@ export const CollectorMobileApp: React.FC = () => {
               </div>
             </div>
 
+            {/* Direct button to open live order status & payout page */}
+            <button
+              type="button"
+              onClick={() => {
+                setShowQrModal(false);
+                setActivePublicOrderId(activeCreatedLot.id);
+              }}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl shadow-md cursor-pointer text-xs flex items-center justify-center gap-2 mb-2 transition-transform active:scale-98"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span>
+                {language === 'hi'
+                  ? 'लाइव ऑर्डर ट्रैकिंग व डायरेक्ट भुगतान पेज खोलें ↗'
+                  : language === 'mr'
+                  ? 'थेट ट्रॅकिंग व पेमेंट पेज उघडा ↗'
+                  : 'Open Live Order Tracking & Direct Payout Page ↗'}
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowQrModal(false)}
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs cursor-pointer"
+              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
             >
               {t.close}
             </button>
           </div>
         </div>
-      )}
-
-      {selectedAiInsightsMaterial && (
-        <AiMandiInsightsModal
-          material={selectedAiInsightsMaterial}
-          onClose={() => setSelectedAiInsightsMaterial(null)}
-        />
       )}
 
       {selectedGraphMaterial && (

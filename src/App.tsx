@@ -7,11 +7,11 @@ import { GovernmentAuditPortal } from './components/GovernmentAuditPortal';
 import { PublicOrderTrackingView } from './components/PublicOrderTrackingView';
 
 const AppRouter: React.FC = () => {
-  const { currentView } = useApp();
+  const { currentView, activePublicOrderId, setActivePublicOrderId, lots } = useApp();
   const [trackingOrderId, setTrackingOrderId] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      return params.get('orderId');
+      return params.get('orderId') || params.get('lotId') || params.get('track');
     }
     return null;
   });
@@ -19,22 +19,31 @@ const AppRouter: React.FC = () => {
   useEffect(() => {
     const checkParams = () => {
       const params = new URLSearchParams(window.location.search);
-      setTrackingOrderId(params.get('orderId'));
+      setTrackingOrderId(params.get('orderId') || params.get('lotId') || params.get('track'));
     };
     window.addEventListener('popstate', checkParams);
     return () => window.removeEventListener('popstate', checkParams);
   }, []);
 
-  if (trackingOrderId) {
+  const effectiveOrderId = activePublicOrderId || trackingOrderId;
+
+  if (effectiveOrderId) {
+    const matchedLot = lots.find((l) => l.id.toUpperCase() === effectiveOrderId.toUpperCase());
     return (
       <PublicOrderTrackingView
-        orderId={trackingOrderId}
+        orderId={effectiveOrderId}
+        lot={matchedLot}
         onBackToApp={() => {
-          const url = new URL(window.location.href);
-          url.searchParams.delete('orderId');
-          url.searchParams.delete('view');
-          window.history.pushState({}, '', url.pathname);
+          if (typeof window !== 'undefined') {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('orderId');
+            url.searchParams.delete('lotId');
+            url.searchParams.delete('track');
+            url.searchParams.delete('view');
+            window.history.pushState({}, '', url.pathname);
+          }
           setTrackingOrderId(null);
+          setActivePublicOrderId(null);
         }}
       />
     );

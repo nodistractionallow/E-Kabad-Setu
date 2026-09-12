@@ -39,8 +39,10 @@ interface AppContextType {
   lots: EWasteLot[];
   activeCreatedLot: EWasteLot | null;
   setActiveCreatedLot: (lot: EWasteLot | null) => void;
+  activePublicOrderId: string | null;
+  setActivePublicOrderId: (id: string | null) => void;
   addLot: (lot: Omit<EWasteLot, 'id' | 'timestamp' | 'status'>) => Promise<EWasteLot>;
-  approveAndPayLot: (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH') => Promise<void>;
+  approveAndPayLot: (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH', overrideRatePerKg?: number) => Promise<void>;
   rejectLot: (lotId: string, reason: string) => Promise<void>;
   reopenLot?: (lotId: string) => Promise<void>;
   updateMaterialPrice: (materialId: string, newPrice: number) => Promise<void>;
@@ -149,6 +151,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [recycler] = useState<RecyclerFacility>(MOCK_RECYCLER);
   const [activeCreatedLot, setActiveCreatedLot] = useState<EWasteLot | null>(null);
+  const [activePublicOrderId, setActivePublicOrderId] = useState<string | null>(null);
   const [isFirebaseSyncing, setIsFirebaseSyncing] = useState<boolean>(false);
   const [isSyncingOfflineQueue, setIsSyncingOfflineQueue] = useState<boolean>(false);
   const [isSupabaseSyncing, setIsSupabaseSyncing] = useState<boolean>(false);
@@ -445,15 +448,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newLot;
   };
 
-  const approveAndPayLot = async (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH'): Promise<void> => {
+  const approveAndPayLot = async (lotId: string, weighbridgeWeightKg: number, paymentMode: 'UPI' | 'CASH', overrideRatePerKg?: number): Promise<void> => {
     let updatedLot: EWasteLot | undefined;
+    const matchedLot = lots.find((l) => l.id === lotId);
+    const effectiveRate = (overrideRatePerKg && overrideRatePerKg > 0) 
+      ? overrideRatePerKg 
+      : (matchedLot?.ratePerKg && matchedLot.ratePerKg > 0 ? matchedLot.ratePerKg : 120);
+    const finalPayout = Math.round(weighbridgeWeightKg * effectiveRate);
 
     setLots((prev) =>
       prev.map((lot) => {
         if (lot.id === lotId) {
-          const finalPayout = Math.round(weighbridgeWeightKg * lot.ratePerKg);
           updatedLot = {
             ...lot,
+            ratePerKg: effectiveRate,
             status: 'paid',
             weighbridgeWeightKg,
             finalPayoutAmount: finalPayout,
@@ -466,13 +474,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    const matchedLot = lots.find((l) => l.id === lotId);
     let updatedCollector = collector;
     if (matchedLot && matchedLot.collectorId === collector.id) {
-      const payout = Math.round(weighbridgeWeightKg * matchedLot.ratePerKg);
       updatedCollector = {
         ...collector,
-        todayEarnings: collector.todayEarnings + payout
+        todayEarnings: collector.todayEarnings + finalPayout
       };
       setCollector(updatedCollector);
     }
@@ -853,6 +859,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lots,
         activeCreatedLot,
         setActiveCreatedLot,
+        activePublicOrderId,
+        setActivePublicOrderId,
         addLot,
         approveAndPayLot,
         rejectLot,

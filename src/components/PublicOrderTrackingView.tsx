@@ -85,6 +85,9 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
   const [authorityWeightInput, setAuthorityWeightInput] = useState<number>(() => {
     return currentLot.weighbridgeWeightKg || currentLot.weightKg || 5.0;
   });
+  const [authorityRateInput, setAuthorityRateInput] = useState<number>(() => {
+    return (currentLot.ratePerKg && currentLot.ratePerKg > 0) ? currentLot.ratePerKg : 120;
+  });
   const [authorityPaymentMode, setAuthorityPaymentMode] = useState<'UPI' | 'CASH'>('UPI');
   const [isDisbursing, setIsDisbursing] = useState(false);
 
@@ -97,7 +100,10 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
     } else if (currentLot.weightKg) {
       setAuthorityWeightInput(currentLot.weightKg);
     }
-  }, [currentLot.weighbridgeWeightKg, currentLot.weightKg]);
+    if (currentLot.ratePerKg && currentLot.ratePerKg > 0) {
+      setAuthorityRateInput(currentLot.ratePerKg);
+    }
+  }, [currentLot.weighbridgeWeightKg, currentLot.weightKg, currentLot.ratePerKg]);
 
   // Hydrate from SQLite storage on mount or ID change
   useEffect(() => {
@@ -283,10 +289,12 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
       const nowIso = new Date().toISOString();
       const nowMs = Date.now();
       const utr = `UTR-CPCB-${nowMs.toString().slice(-8)}`;
-      const payoutVal = Math.round(authorityWeightInput * displayLot.ratePerKg);
+      const effectiveRate = (displayLot.ratePerKg && displayLot.ratePerKg > 0) ? displayLot.ratePerKg : authorityRateInput;
+      const payoutVal = Math.round(authorityWeightInput * effectiveRate);
 
       const updatedPaidLot: EWasteLot = {
         ...currentLot,
+        ratePerKg: effectiveRate,
         status: 'paid',
         weighbridgeWeightKg: authorityWeightInput,
         finalPayoutAmount: payoutVal,
@@ -302,7 +310,7 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
       previousStatusRef.current = 'paid';
 
       // 2. Persist to AppContext
-      await approveAndPayLot(displayLot.id, authorityWeightInput, authorityPaymentMode);
+      await approveAndPayLot(displayLot.id, authorityWeightInput, authorityPaymentMode, effectiveRate);
 
       // 3. Direct SQLite write to ensure immediate relational persistence
       await updateLotInSqlite(displayLot.id, updatedPaidLot);
@@ -447,122 +455,145 @@ export const PublicOrderTrackingView: React.FC<PublicOrderTrackingViewProps> = (
           </div>
         )}
 
-        {/* OFFICIAL AUTHORITY WEIGHBRIDGE & SETTLEMENT ACTION BOX */}
-        {isAuthorityMode && (
-          !isPaid ? (
-            /* CASE 1: UNPAID -> AUTHORITY ACTION WITH WEIGHT & PAY OPTION */
-            <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-400 rounded-3xl p-6 shadow-md space-y-4 animate-fadeIn">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-amber-200/80">
-                <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                    <Scale className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-900 bg-amber-200 px-2.5 py-0.5 rounded-full border border-amber-300">
-                        Authority Gate Clearance
-                      </span>
-                      <span className="text-xs font-extrabold text-amber-800">STATUS: UNPAID</span>
-                    </div>
-                    <h2 className="text-base font-extrabold text-slate-900 mt-0.5">
-                      Class-III Weighbridge Audit & Direct Statutory Settlement
-                    </h2>
-                  </div>
-                </div>
-                <div className="text-left sm:text-right">
-                  <div className="text-[10px] font-mono uppercase text-amber-800 font-bold">Safai Sathi / Vendor</div>
-                  <div className="text-xs font-bold text-slate-900">{displayLot.collectorName} ({displayLot.collectorId})</div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Class-III Verified Gross Weight (kg)
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      value={authorityWeightInput}
-                      onChange={(e) => setAuthorityWeightInput(Math.max(0.1, parseFloat(e.target.value) || 0))}
-                      className="w-full pl-3 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                    />
-                    <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-mono">kg</span>
-                  </div>
-                  <span className="text-[11px] text-slate-500 font-mono mt-1 block">
-                    Declared Mass: {displayLot.weightKg} kg
-                  </span>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Statutory Payment Mode
-                  </label>
-                  <select
-                    value={authorityPaymentMode}
-                    onChange={(e) => setAuthorityPaymentMode(e.target.value as 'UPI' | 'CASH')}
-                    className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500"
-                  >
-                    <option value="UPI">Direct Instant UPI</option>
-                    <option value="CASH">Physical Cash Voucher</option>
-                  </select>
-                  <span className="text-[11px] text-slate-500 font-mono mt-1 block">
-                    CPCB Floor Rate: ₹{displayLot.ratePerKg}/kg
-                  </span>
-                </div>
-
-                <div className="flex flex-col justify-end">
-                  <button
-                    type="button"
-                    disabled={isDisbursing}
-                    onClick={handleAuthorityDisburse}
-                    className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-60"
-                  >
-                    {isDisbursing ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Disbursing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-5 h-5" />
-                        <span>Verify & Disburse ₹{Math.round(authorityWeightInput * displayLot.ratePerKg).toLocaleString('en-IN')}</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            /* CASE 2: ALREADY PAID -> AUTHORITY VERIFIED BANNER (NO PAYING OPTION) */
-            <div className="bg-emerald-50 border-2 border-emerald-400 rounded-3xl p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-fadeIn">
-              <div className="flex items-center gap-3.5">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-                  <ShieldCheck className="w-7 h-7" />
+        {/* OFFICIAL WEIGHBRIDGE & DIRECT STATUTORY SETTLEMENT ACTION BOX */}
+        {!isPaid ? (
+          /* CASE 1: UNPAID -> DIRECT ACTION WITH WEIGHBRIDGE & INSTANT COLLECTOR PAYOUT */
+          <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-400 rounded-3xl p-6 shadow-md space-y-4 animate-fadeIn">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-amber-200/80">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Scale className="w-6 h-6" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-800 bg-emerald-200/70 px-2.5 py-0.5 rounded-full border border-emerald-300">
-                      Authority Audit
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-900 bg-amber-200 px-2.5 py-0.5 rounded-full border border-amber-300">
+                      Direct Facility Gate Settlement
                     </span>
-                    <span className="text-xs font-black text-emerald-700">STATUS: VERIFIED & PAID</span>
+                    <span className="text-xs font-extrabold text-amber-800">STATUS: UNPAID (READY FOR PAYOUT)</span>
                   </div>
-                  <div className="text-base font-extrabold text-slate-900 mt-0.5">
-                    Settlement Completed • No Pending Payment
-                  </div>
-                  <div className="text-xs text-slate-600 font-mono mt-0.5">
-                    Disbursed: ₹{effectiveAmount.toLocaleString('en-IN')} via {displayLot.paymentMode || 'Instant UPI'} • Weighbridge Mass: {effectiveWeight} kg • UTR: {displayLot.settlementUtr || 'UTR-CPCB-8812'}
-                  </div>
+                  <h2 className="text-base font-extrabold text-slate-900 mt-0.5">
+                    Class-III Weighbridge Audit & Direct Statutory Settlement
+                  </h2>
                 </div>
               </div>
-              <div className="px-4 py-2 bg-white border border-emerald-300 rounded-2xl text-right shrink-0">
-                <div className="text-[10px] font-mono uppercase text-slate-400">Payment Status</div>
-                <div className="text-xs font-mono font-black text-emerald-700">100% SETTLED</div>
+              <div className="text-left sm:text-right">
+                <div className="text-[10px] font-mono uppercase text-amber-800 font-bold">Safai Sathi / Collector</div>
+                <div className="text-xs font-bold text-slate-900">{displayLot.collectorName} ({displayLot.collectorId})</div>
               </div>
             </div>
-          )
+
+            <div className={`grid grid-cols-1 sm:grid-cols-2 ${displayLot.ratePerKg === 0 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-4 pt-1`}>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Class-III Verified Gross Weight (kg)
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={authorityWeightInput}
+                    onChange={(e) => setAuthorityWeightInput(Math.max(0.1, parseFloat(e.target.value) || 0))}
+                    className="w-full pl-3 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                  />
+                  <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-mono">kg</span>
+                </div>
+                <span className="text-[11px] text-slate-500 font-mono mt-1 block">
+                  Declared Mass: {displayLot.weightKg} kg
+                </span>
+              </div>
+
+              {displayLot.ratePerKg === 0 && (
+                <div>
+                  <label className="block text-xs font-bold text-amber-900 mb-1">
+                    Factory Agreed Rate (₹/kg)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">₹</span>
+                    <input
+                      type="number"
+                      step="1"
+                      min="1"
+                      value={authorityRateInput}
+                      onChange={(e) => setAuthorityRateInput(Math.max(1, parseFloat(e.target.value) || 0))}
+                      className="w-full pl-7 pr-10 py-2.5 bg-white border border-amber-300 rounded-xl font-mono font-bold text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <span className="absolute right-3 top-2.5 text-xs text-slate-400 font-mono">/kg</span>
+                  </div>
+                  <span className="text-[11px] text-amber-800 font-mono mt-1 block font-semibold">
+                    Original Rate: TBD (Factory Decides)
+                  </span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Statutory Payment Mode
+                </label>
+                <select
+                  value={authorityPaymentMode}
+                  onChange={(e) => setAuthorityPaymentMode(e.target.value as 'UPI' | 'CASH')}
+                  className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="UPI">Direct Instant UPI</option>
+                  <option value="CASH">Physical Cash Voucher</option>
+                </select>
+                <span className="text-[11px] text-slate-500 font-mono mt-1 block">
+                  {displayLot.ratePerKg === 0 ? 'Custom Rate Payout' : `CPCB Floor Rate: ₹${displayLot.ratePerKg}/kg`}
+                </span>
+              </div>
+
+              <div className="flex flex-col justify-end">
+                <button
+                  type="button"
+                  disabled={isDisbursing}
+                  onClick={handleAuthorityDisburse}
+                  className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-60"
+                >
+                  {isDisbursing ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Disbursing to Collector...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-5 h-5" />
+                      <span>
+                        Verify & Disburse ₹{Math.round(authorityWeightInput * ((displayLot.ratePerKg && displayLot.ratePerKg > 0) ? displayLot.ratePerKg : authorityRateInput)).toLocaleString('en-IN')}
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* CASE 2: ALREADY PAID -> VERIFIED & PAID BANNER */
+          <div className="bg-emerald-50 border-2 border-emerald-400 rounded-3xl p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-fadeIn">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <ShieldCheck className="w-7 h-7" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-800 bg-emerald-200/70 px-2.5 py-0.5 rounded-full border border-emerald-300">
+                    Statutory Settlement
+                  </span>
+                  <span className="text-xs font-black text-emerald-700">STATUS: VERIFIED & PAID</span>
+                </div>
+                <div className="text-base font-extrabold text-slate-900 mt-0.5">
+                  Direct Statutory Settlement Completed to Collector
+                </div>
+                <div className="text-xs text-slate-600 font-mono mt-0.5">
+                  Disbursed: ₹{effectiveAmount.toLocaleString('en-IN')} via {displayLot.paymentMode || 'Instant UPI'} • Weighbridge Mass: {effectiveWeight} kg • UTR: {displayLot.settlementUtr || 'UTR-CPCB-8812'}
+                </div>
+              </div>
+            </div>
+            <div className="px-4 py-2 bg-white border border-emerald-300 rounded-2xl text-right shrink-0">
+              <div className="text-[10px] font-mono uppercase text-slate-400">Payment Status</div>
+              <div className="text-xs font-mono font-black text-emerald-700">100% SETTLED</div>
+            </div>
+          </div>
         )}
 
         {/* Status Hero Card */}
